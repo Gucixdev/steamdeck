@@ -136,27 +136,7 @@ impl State {
                 self.busy = true;
                 self.started = Some(std::time::Instant::now());
                 self.output = "updating Flatpak apps...".into();
-                return Task::perform(
-                    async {
-                        match Command::new("flatpak")
-                            .args(["update", "-y", "--noninteractive"])
-                            .output()
-                        {
-                            Ok(o) => {
-                                let mut t = String::from_utf8_lossy(&o.stdout).to_string();
-                                t.push_str(&String::from_utf8_lossy(&o.stderr));
-                                let t = t.trim().to_string();
-                                if o.status.success() {
-                                    format!("flatpak update finished\n{t}")
-                                } else {
-                                    format!("flatpak update failed\n{t}")
-                                }
-                            }
-                            Err(e) => format!("could not start flatpak: {e}"),
-                        }
-                    },
-                    Msg::Done,
-                );
+                return Task::perform(async { update_all_streaming() }, Msg::Done);
             }
             Msg::Loaded(v) => {
                 self.items = Some(v);
@@ -334,6 +314,97 @@ impl State {
         .height(Fill)
         .into()
     }
+}
+
+/// Run a shell command line, send every output line to the log while it runs, and return
+/// (success, all the lines). Its stdin is closed, so nothing can sit waiting for an answer.
+fn stream_cmd(cmd: &str) -> (bool, String) {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    let child = Command::new("sh")
+        .args(["-c", &format!("exec {cmd} 2>&1")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => return (false, format!("could not start `{cmd}`: {e}")),
+    };
+    let mut all = String::new();
+    if let Some(out) = child.stdout.take() {
+        // flatpak redraws progress with carriage returns: split on those as well
+        for chunk in BufReader::new(out).split(b'\n') {
+            let Ok(chunk) = chunk else { break };
+            for part in String::from_utf8_lossy(&chunk).split('\r') {
+                let t = part.trim();
+                if !t.is_empty() {
+                    log::write("flatpak", t);
+                    all.push_str(t);
+                    all.push('\n');
+                }
+            }
+        }
+    }
+    (child.wait().map(|s| s.success()).unwrap_or(false), all)
+}
+
+/// Update the Flatpak apps. The user installation first, with no questions. The system installation
+/// only when it has updates, and through pkexec: a plain `flatpak update` on it waits for a password
+/// that a window without a terminal can never give, and looks hung (it did).
+fn update_all_streaming() -> String {
+    let mut report = Vec::new();
+    let (ok, out) = stream_cmd("timeout 1800 flatpak update --user -y --noninteractive");
+    report.push(format!(
+        "your apps: {}",
+        if ok { "up to date" } else { "update failed" }
+    ));
+    let tail = |s: &str| {
+        s.lines()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    if !ok {
+        report.push(tail(&out));
+    }
+    let pending = Command::new("flatpak")
+        .args([
+            "remote-ls",
+            "--system",
+            "--updates",
+            "--columns=application",
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count()
+        })
+        .unwrap_or(0);
+    if pending > 0 {
+        let (ok2, out2) =
+            stream_cmd("timeout 1800 pkexec flatpak update --system -y --noninteractive");
+        report.push(format!(
+            "system apps ({pending} update(s)): {}",
+            if ok2 {
+                "up to date"
+            } else {
+                "update failed (needs your password)"
+            }
+        ));
+        if !ok2 {
+            report.push(tail(&out2));
+        }
+    }
+    report.join("\n")
 }
 
 fn run(item: Option<Item>, a: Action) -> String {

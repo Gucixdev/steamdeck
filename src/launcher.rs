@@ -9,6 +9,14 @@ use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
 
+/// Which Home button started the running update, so only that one shows the spinner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Job {
+    Protons,
+    Flatpaks,
+    Everything,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Section {
     #[default]
@@ -67,6 +75,7 @@ struct App {
     seen: [Option<String>; 2],
     tick: usize,
     frames: usize,
+    job: Option<Job>,
 }
 
 pub fn run(start: Start) -> iced::Result {
@@ -122,6 +131,7 @@ impl App {
             seen: [None, None],
             tick: 0,
             frames: 0,
+            job: None,
         };
         (
             app,
@@ -152,18 +162,26 @@ impl App {
                     None => Task::none(),
                 }
             }
-            Msg::UpdateFlatpaks => self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
-            Msg::UpdateEverything => Task::batch([
+            Msg::UpdateFlatpaks => {
+                self.job = Some(Job::Flatpaks);
+                self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps)
+            }
+            Msg::UpdateEverything => {
+                self.job = Some(Job::Everything);
+                Task::batch([
+                    self.proton
+                        .update(proton_gui::Msg::UpdateAll)
+                        .map(Msg::Proton),
+                    self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
+                ])
+            }
+            // stays on Home: the button itself shows that it is working
+            Msg::UpdateProtons => {
+                self.job = Some(Job::Protons);
                 self.proton
                     .update(proton_gui::Msg::UpdateAll)
-                    .map(Msg::Proton),
-                self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
-            ]),
-            // stays on Home: the button itself shows that it is working
-            Msg::UpdateProtons => self
-                .proton
-                .update(proton_gui::Msg::UpdateAll)
-                .map(Msg::Proton),
+                    .map(Msg::Proton)
+            }
             Msg::Proton(m) => self.proton.update(m).map(Msg::Proton),
             Msg::Seal(m) => self.seal.update(m).map(Msg::Seal),
             Msg::System(m) => self.system.update(m).map(Msg::System),
@@ -216,6 +234,7 @@ impl App {
 
     /// Four tabs on top (Home, ProtonUp, Flatseal, Settings); the sidebar belongs to the tab.
     fn view(&self) -> Element<'_, Msg> {
+        let running = self.proton.is_busy() || self.apps.is_updating();
         let nav = |label: &'static str, s: Section| nav_item(label, self.section == s, Msg::Go(s));
         let in_proton = matches!(
             self.section,
@@ -300,7 +319,7 @@ impl App {
                     "Update Protons",
                     "Installs the newest version of every Proton you have and removes the older ones. Games on an old one are moved to the new one.",
                     "Update",
-                    self.proton.is_busy(),
+                    running && self.job == Some(Job::Protons),
                     self.tick,
                     Msg::UpdateProtons
                 ),
@@ -308,7 +327,7 @@ impl App {
                     "Update Flatpak apps",
                     "flatpak update for every installed app and runtime.",
                     "Update",
-                    self.apps.is_updating(),
+                    running && self.job == Some(Job::Flatpaks),
                     self.tick,
                     Msg::UpdateFlatpaks
                 ),
@@ -316,7 +335,7 @@ impl App {
                     "Update everything",
                     "Both of the above.",
                     "Update all",
-                    self.proton.is_busy() || self.apps.is_updating(),
+                    running && self.job == Some(Job::Everything),
                     self.tick,
                     Msg::UpdateEverything
                 ),
