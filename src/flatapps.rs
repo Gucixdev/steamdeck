@@ -8,6 +8,7 @@ use iced::widget::{button, column, row, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -110,6 +111,10 @@ pub struct State {
     output: String,
     busy: bool,
     started: Option<std::time::Instant>,
+    /// what the running operation is, for the line at the top of the page
+    doing: String,
+    /// operations seen so far, expected in all, and the one being worked on (written by the update thread)
+    progress: Arc<Mutex<(usize, usize, String)>>,
 }
 
 fn load() -> Task<Msg> {
@@ -125,6 +130,8 @@ impl State {
                 output: String::new(),
                 busy: true,
                 started: None,
+                doing: String::new(),
+                progress: Arc::new(Mutex::new((0, 0, String::new()))),
             },
             load(),
         )
@@ -133,10 +140,15 @@ impl State {
     pub fn update(&mut self, m: Msg) -> Task<Msg> {
         match m {
             Msg::UpdateAll => {
+                self.doing = "Updating Flatpak apps".to_string();
                 self.busy = true;
                 self.started = Some(std::time::Instant::now());
                 self.output = "updating Flatpak apps...".into();
-                return Task::perform(async { update_all_streaming() }, Msg::Done);
+                if let Ok(mut p) = self.progress.lock() {
+                    *p = (0, 0, String::new());
+                }
+                let progress = self.progress.clone();
+                return Task::perform(async move { update_all_streaming(progress) }, Msg::Done);
             }
             Msg::Loaded(v) => {
                 self.items = Some(v);
@@ -152,17 +164,34 @@ impl State {
                 self.asking = None;
                 let item = self.items.as_ref().and_then(|v| v.get(i)).cloned();
                 self.busy = true;
-                self.output = "working...".into();
+                self.started = Some(std::time::Instant::now());
+                let name = item.as_ref().map(|it| it.name.clone()).unwrap_or_default();
+                self.doing = match &a {
+                    Action::Uninstall(true) => format!("Uninstalling {name} and its data"),
+                    Action::Uninstall(false) => format!("Uninstalling {name}"),
+                    Action::DeleteData => format!("Deleting the data of {name}"),
+                    Action::Unused => "Removing unused runtimes".to_string(),
+                };
+                self.output.clear();
                 return Task::perform(async move { run(item, a) }, Msg::Done);
             }
             Msg::Done(o) => {
                 self.started = None;
+                self.doing.clear();
                 log::write("flatapps", &o);
                 self.output = o;
                 return load();
             }
         }
         Task::none()
+    }
+
+    /// "2/5 org.gnome.Platform" while an update runs, empty before the first operation.
+    pub fn progress_label(&self) -> String {
+        match self.progress.lock() {
+            Ok(p) if p.0 > 0 => format!("{}/{}  {}", p.0, p.1.max(p.0), p.2),
+            _ => String::new(),
+        }
     }
 
     /// True while an update runs (the window keeps its spinner turning).
@@ -193,7 +222,7 @@ impl State {
         text(t).size(SMALL_SIZE).into()
     }
 
-    pub fn view(&self) -> Element<'_, Msg> {
+    pub fn view(&self, tick: usize) -> Element<'_, Msg> {
         let mut col = column![
             heading("Flatpak apps"),
             row![
@@ -225,6 +254,20 @@ impl State {
             .align_y(iced::Alignment::Center),
         ]
         .spacing(SPACING);
+        // what is running now, with a spinner, at the top where it is seen
+        if let Some(t0) = self.started {
+            let prog = self.progress_label();
+            let mut line = format!(
+                "{} {}...  {}",
+                crate::ui::spinner(tick),
+                self.doing,
+                crate::ui::human_duration(t0.elapsed().as_secs())
+            );
+            if !prog.is_empty() && self.doing.starts_with("Updating") {
+                line.push_str(&format!("   {prog}"));
+            }
+            col = col.push(text(line).size(TEXT_SIZE).color(crate::ui::ACCENT));
+        }
         // the result goes at the top: at the bottom of a long list it was never seen
         if !self.output.is_empty() {
             col = col.push(text(self.output.clone()).size(SMALL_SIZE));
@@ -304,9 +347,6 @@ impl State {
                 }
             }
         }
-        if self.busy && self.items.is_some() {
-            col = col.push(text("working...").size(TEXT_SIZE).color(DIM));
-        }
         scrollable(col.padding(iced::Padding {
             right: 16.0,
             ..iced::Padding::ZERO
@@ -316,9 +356,19 @@ impl State {
     }
 }
 
+/// `runtime/org.gnome.Platform/x86_64/51` -> `org.gnome.Platform`
+fn pretty_ref(r: &str) -> String {
+    let r = r.split_whitespace().next().unwrap_or(r);
+    let mut parts = r.split('/');
+    match (parts.next(), parts.next()) {
+        (Some(_), Some(id)) if !id.is_empty() => id.to_string(),
+        _ => r.to_string(),
+    }
+}
+
 /// Run a shell command line, send every output line to the log while it runs, and return
 /// (success, all the lines). Its stdin is closed, so nothing can sit waiting for an answer.
-fn stream_cmd(cmd: &str) -> (bool, String) {
+fn stream_cmd(cmd: &str, progress: &Arc<Mutex<(usize, usize, String)>>) -> (bool, String) {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     let child = Command::new("sh")
@@ -339,6 +389,20 @@ fn stream_cmd(cmd: &str) -> (bool, String) {
                 let t = part.trim();
                 if !t.is_empty() {
                     log::write("flatpak", t);
+                    // non-terminal output has no percentages, only one "Installing/Updating ref" line
+                    // per operation: count those
+                    if let Some(r) = t
+                        .strip_prefix("Installing ")
+                        .or_else(|| t.strip_prefix("Updating "))
+                    {
+                        if let Ok(mut p) = progress.lock() {
+                            p.0 += 1;
+                            if p.0 > p.1 {
+                                p.1 = p.0;
+                            }
+                            p.2 = pretty_ref(r);
+                        }
+                    }
                     all.push_str(t);
                     all.push('\n');
                 }
@@ -351,9 +415,29 @@ fn stream_cmd(cmd: &str) -> (bool, String) {
 /// Update the Flatpak apps. The user installation first, with no questions. The system installation
 /// only when it has updates, and through pkexec: a plain `flatpak update` on it waits for a password
 /// that a window without a terminal can never give, and looks hung (it did).
-fn update_all_streaming() -> String {
+fn update_all_streaming(progress: Arc<Mutex<(usize, usize, String)>>) -> String {
     let mut report = Vec::new();
-    let (ok, out) = stream_cmd("timeout 1800 flatpak update --user -y --noninteractive");
+    // how many things the user installation is going to update, for "2 of 5"
+    let expected = Command::new("flatpak")
+        .args(["remote-ls", "--user", "--updates", "--columns=ref"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .count()
+        })
+        .unwrap_or(0);
+    if let Ok(mut p) = progress.lock() {
+        p.1 = expected;
+    }
+    let (ok, out) = stream_cmd(
+        "timeout 1800 flatpak update --user -y --noninteractive",
+        &progress,
+    );
     report.push(format!(
         "your apps: {}",
         if ok { "up to date" } else { "update failed" }
@@ -390,8 +474,10 @@ fn update_all_streaming() -> String {
         })
         .unwrap_or(0);
     if pending > 0 {
-        let (ok2, out2) =
-            stream_cmd("timeout 1800 pkexec flatpak update --system -y --noninteractive");
+        let (ok2, out2) = stream_cmd(
+            "timeout 1800 pkexec flatpak update --system -y --noninteractive",
+            &progress,
+        );
         report.push(format!(
             "system apps ({pending} update(s)): {}",
             if ok2 {
@@ -539,18 +625,23 @@ mod tests {
             Action::Uninstall(true),
             Action::DeleteData,
         ] {
-            s.output.clear();
+            s.started = None;
             let _ = s.update(Msg::Ask(0, a.clone()));
             let _ = s.update(Msg::Do(0, a.clone()));
-            assert_eq!(
-                s.output, "working...",
+            assert!(
+                s.started.is_some(),
                 "{a:?} must start after its question was confirmed"
             );
+            assert!(
+                s.doing.contains("org.a.A"),
+                "the page says what it is doing: {}",
+                s.doing
+            );
         }
-        s.output.clear();
+        s.started = None;
         let _ = s.update(Msg::Ask(usize::MAX, Action::Unused));
         let _ = s.update(Msg::Do(usize::MAX, Action::Unused));
-        assert_eq!(s.output, "working...");
+        assert!(s.started.is_some());
     }
 
     #[test]
@@ -559,12 +650,24 @@ mod tests {
         s.items = Some(vec![item("org.a.A")]);
         s.output.clear();
         let _ = s.update(Msg::Do(0, Action::DeleteData));
-        assert!(s.output.is_empty(), "nothing was asked, nothing runs");
+        assert!(s.started.is_none(), "nothing was asked, nothing runs");
         let _ = s.update(Msg::Ask(0, Action::Uninstall(false)));
         let _ = s.update(Msg::Do(0, Action::DeleteData));
         assert!(
-            s.output.is_empty(),
+            s.started.is_none(),
             "a different action than the one asked is ignored"
         );
+    }
+    #[test]
+    fn refs_are_shown_by_their_id() {
+        assert_eq!(
+            pretty_ref("runtime/org.gnome.Platform/x86_64/51"),
+            "org.gnome.Platform"
+        );
+        assert_eq!(
+            pretty_ref("app/org.gimp.GIMP/x86_64/stable"),
+            "org.gimp.GIMP"
+        );
+        assert_eq!(pretty_ref("weird"), "weird");
     }
 }

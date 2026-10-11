@@ -244,11 +244,17 @@ pub fn card_busy<'a, M: Clone + 'a>(
     action: &'static str,
     busy: bool,
     tick: usize,
+    busy_label: String,
     msg: M,
 ) -> Element<'a, M> {
     let right: Element<'a, M> = if busy {
+        let label = if busy_label.is_empty() {
+            "Working".to_string()
+        } else {
+            busy_label
+        };
         container(
-            text(format!("{}  Working", spinner(tick)))
+            text(format!("{}  {label}", spinner(tick)))
                 .size(TEXT_SIZE)
                 .color(ACCENT),
         )

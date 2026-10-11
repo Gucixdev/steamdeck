@@ -321,6 +321,7 @@ impl App {
                     "Update",
                     running && self.job == Some(Job::Protons),
                     self.tick,
+                    String::new(),
                     Msg::UpdateProtons
                 ),
                 card_busy(
@@ -329,6 +330,7 @@ impl App {
                     "Update",
                     running && self.job == Some(Job::Flatpaks),
                     self.tick,
+                    self.apps.progress_label(),
                     Msg::UpdateFlatpaks
                 ),
                 card_busy(
@@ -337,6 +339,7 @@ impl App {
                     "Update all",
                     running && self.job == Some(Job::Everything),
                     self.tick,
+                    String::new(),
                     Msg::UpdateEverything
                 ),
                 self.proton.report_view().map(Msg::Proton),
@@ -367,7 +370,7 @@ impl App {
             .into(),
             Section::Apps => column![
                 page_title("Settings: Flatpak apps", "Uninstall apps, delete what they keep, and free unused runtimes."),
-                self.apps.view().map(Msg::Apps),
+                self.apps.view(self.tick).map(Msg::Apps),
             ]
             .spacing(SPACING)
             .into(),
