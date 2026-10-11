@@ -299,6 +299,15 @@ impl App {
             }
             Msg::SetLaunch(root, appid, opts) => {
                 self.launch_edit.remove(&(root.clone(), appid));
+                // show it at once: a second click before the file is re-read must build on this one,
+                // not on the old value (that would undo the first checkbox)
+                if let Some(r) = self.all.iter_mut().find(|r| r.root == root) {
+                    if opts.is_empty() {
+                        r.launch.remove(&appid);
+                    } else {
+                        r.launch.insert(appid, opts.clone());
+                    }
+                }
                 self.error = None;
                 self.notice = None;
                 return Task::perform(
