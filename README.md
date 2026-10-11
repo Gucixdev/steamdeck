@@ -8,7 +8,7 @@ written in Rust, and three bash scripts that put them on the Deck and tune the s
 | `protonup` | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more for Steam | one binary, window or command line |
 | `flatseal` | edit Flatpak permission overrides | one binary, window or command line |
 | [`install`](install) | put the two binaries and menu entries on the Deck | bash, no root |
-| [`setup`](setup) | OOM guard, swap file, sysctl, ssh | bash, asks sudo |
+| [`setup`](setup) | a wizard: install the programs, OOM guard, swap file, sysctl, ssh | bash, asks sudo |
 | [`build`](build) | build the release binaries | bash |
 
 Both apps are one executable each (about 7-8 MB): the window is [iced](https://iced.rs) drawn on the GPU
@@ -20,7 +20,7 @@ installed next to them.
 On the Deck, in Desktop Mode, in a terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/install | bash
+curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/scripts/install | bash
 ```
 
 That downloads the binaries of the latest release, verifies their SHA-256 against the release's
@@ -40,7 +40,11 @@ src/protonup.rs           protonup command line     src/proton_gui.rs   its wind
 src/github.rs install.rs sources.rs steam.rs games.rs    releases, install, sources, Steam dirs, per-game tools
 src/flatseal.rs           flatseal command line     src/seal_gui.rs     its window
 src/flatpak.rs keyfile.rs perms.rs portals.rs        overrides, keyfile format, permissions, portals
-build install setup run   bash: build, curl|bash installer, system setup, rebuild-and-start
+setup                     the wizard (asks, confirms, applies)
+run                       rebuild when src changed, start one program
+scripts/build             distributable binaries, GitHub release
+scripts/install           the curl|bash installer
+scripts/system            the /etc changes: oom, sysctl, swapfile, ssh, undo (used by setup)
 ```
 
 One Cargo package, one `src`, two binaries (`protonup`, `flatseal`).
@@ -50,8 +54,7 @@ Then, if you want the system tuning:
 ```sh
 git clone https://github.com/Gucixdev/steamdeck && cd steamdeck
 passwd                 # once: the deck user has no password and sudo needs one
-./setup all            # oom guard + sysctl + ssh
-./setup swapfile 16G   # optional: a bigger swap file
+./setup                # asks what you want, shows the list, then does it
 ```
 
 ## protonup
@@ -121,6 +124,11 @@ and system bus policies and environment variables are covered.
 
 ## setup
 
+`./setup` is a wizard: it asks whether to install the programs (and the weekly Proton-GE update), the OOM
+guard, the memory settings (and the swappiness value), a new swap file size, and ssh; it shows the list
+and applies it only after you confirm. The actions below are what `scripts/system` does, and what you can
+run one by one: `scripts/system oom`, `scripts/system swapfile 16G`, `scripts/system undo`.
+
 | action | what it writes (all under `/etc`, which survives SteamOS updates) |
 |---|---|
 | `oom` | systemd-oomd settings: kill the worst offender in the user slice (the game) at 60% memory pressure or 90% swap, keep the Gaming Mode compositor out of reach, enable the daemon |
@@ -135,11 +143,11 @@ removed. `--root DIR` writes into a test tree and only prints the commands, `--d
 ## Build
 
 ```sh
-./build                 # host toolchain, dist/protonup-x86_64-linux, dist/flatseal-x86_64-linux, dist/SHA256SUMS
-./build --portable      # links against glibc 2.36 with zig (cargo-zigbuild): runs on any SteamOS
-./build --publish v0.1.0   # also create the GitHub release with those files
-cargo test              # 30 unit and end-to-end tests (a local HTTP server stands in for GitHub)
-bats tests/             # the install and setup scripts, 20 tests
+scripts/build                 # host toolchain, dist/protonup-x86_64-linux, dist/flatseal-x86_64-linux, dist/SHA256SUMS
+scripts/build --portable      # links against glibc 2.36 with zig (cargo-zigbuild): runs on any SteamOS
+scripts/build --publish v0.1.0   # also create the GitHub release with those files
+cargo test              # unit and end-to-end tests (a local HTTP server stands in for GitHub)
+bats tests/             # the install, system and setup scripts
 ```
 
 Use `--portable` for releases: a plain build needs the glibc of the machine it was built on.
@@ -148,7 +156,7 @@ Use `--portable` for releases: a plain build needs the glibc of the machine it w
 
 `./run` builds both programs when something in `src/` changed (otherwise it starts at once), then asks
 which one to start; `./run flatseal` skips the question, `./run --release` uses the optimised build. It
-passes no arguments on, use `target/debug/protonup ...` for those. `./build` makes the distributable
+passes no arguments on, use `target/debug/protonup ...` for those. `scripts/build` makes the distributable
 binaries (`--portable` for the release).
 
 ## Status
@@ -157,7 +165,7 @@ Tested on an x86_64 desktop: all unit tests, the whole install pipeline against 
 GitHub API and against the real one (a real xz-compressed Luxtorpeda release with its published
 checksum), the windows rendered and inspected, both scripts under bats. **Not yet run on an actual
 Steam Deck**: the systemd-oomd units and the swap file steps follow what SteamOS ships but have not
-been exercised on one. `./setup status` and `./setup undo` are safe to try first.
+been exercised on one. `scripts/system status` and `scripts/system undo` are safe to try first.
 
 Not done: the apps cannot be driven by the Deck's gamepad directly (they take touch and the trackpads;
 as a non-Steam game Steam Input maps the pads to the mouse), no DXVK/VKD3D downloads for Lutris/Heroic,

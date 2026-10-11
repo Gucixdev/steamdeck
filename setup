@@ -1,239 +1,107 @@
 #!/usr/bin/env bash
-# setup - basic system tuning for a Steam Deck, as small separate steps. Needs root (it asks sudo).
+# setup - a wizard for a fresh Steam Deck: asks what you want, shows the list, then does it.
 #
-#   ./setup status                  what is configured now
-#   ./setup oom                     systemd-oomd: kill the game, not the whole session, when memory runs out
-#   ./setup sysctl [--swappiness N] memory sysctl defaults suited to zram (writes /etc/sysctl.d)
-#   ./setup swapfile SIZE           resize the swap file (e.g. 8G, 16G); keeps the existing path
-#   ./setup ssh                     enable sshd so you can log in from another computer
-#   ./setup all                     oom + sysctl + ssh
-#   ./setup undo                    remove everything this script wrote
+#   ./setup                  ask, confirm, apply
 #
-# options
-#   --root DIR     write the files under DIR and only print the system commands (for testing)
-#   --dry-run      print what would be written and run, change nothing
-#
-# Only /etc is touched (it survives SteamOS updates; /usr does not) and every file this script writes
-# starts with a "managed by steamdeck/setup" line, so `undo` removes exactly those and nothing else.
-# On a Deck set a password first (`passwd`), sudo asks for it.
+# It runs two scripts from scripts/: `install` (ProtonUp and Flatseal into ~/.local/bin) and `system`
+# (OOM guard, sysctl, swap file, ssh; asks sudo once). Nothing is changed until you confirm the summary.
+# Testing only: --dry-run prints what would run, --root DIR writes the /etc files under DIR.
 set -euo pipefail
 
-ARGS=("$@")
-ROOT=/
-DRY=0
-SWAPPINESS=100
-ACTIONS=()
-MARK="# managed by steamdeck/setup"
-
-say() { printf '%s\n' "$*"; }
-die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
-
-usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
-
+HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+DRY=()
+ROOTOPT=()
 while [ $# -gt 0 ]; do
 	case $1 in
-		--root) ROOT=${2:?--root needs a directory}; shift ;;
-		--dry-run) DRY=1 ;;
-		--swappiness) SWAPPINESS=${2:?--swappiness needs a number}; shift ;;
-		-h|--help) usage; exit 0 ;;
-		-*) die "unknown option $1 (see --help)" ;;
-		*) ACTIONS+=("$1") ;;
+		--dry-run) DRY=(--dry-run) ;;
+		--root) ROOTOPT=(--root "${2:?--root needs a directory}"); shift ;;
+		-h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		*) echo "setup: unknown option $1" >&2; exit 2 ;;
 	esac
 	shift
 done
-[ ${#ACTIONS[@]} -gt 0 ] || { usage; exit 2; }
-case $SWAPPINESS in ''|*[!0-9]*) die "--swappiness needs a number" ;; esac
-[ "$SWAPPINESS" -le 200 ] || die "--swappiness must be 0..200"
 
-# unknown actions are rejected before anything asks for a password
-for a in "${ACTIONS[@]}"; do
-	case $a in
-		oom|sysctl|ssh|all|status|undo|swapfile) ;;
-		[0-9]*[GgMm]) ;; # the size after swapfile
-		*) die "unknown action '$a' (oom, sysctl, swapfile SIZE, ssh, all, status, undo)" ;;
-	esac
-done
+# ask_yn TEXT DEFAULT(y|n) -> sets YES=1/0 ; end of input takes the default
+ask_yn() {
+	local def=$2 hint ans
+	[ "$def" = y ] && hint='[Y/n]' || hint='[y/N]'
+	while :; do
+		read -rp "  $1 $hint " ans || ans=
+		case ${ans:-$def} in
+			[Yy]*) YES=1; return ;;
+			[Nn]*) YES=0; return ;;
+			*) echo "    answer y or n" ;;
+		esac
+	done
+}
 
-# a root other than / means a test tree: files go there, commands are only printed
-ROOT=${ROOT%/}
-LIVE=1
-[ -z "$ROOT" ] || LIVE=0
-[ "$DRY" = 0 ] || LIVE=0
+# ask_val TEXT DEFAULT REGEX -> sets VAL
+ask_val() {
+	local ans
+	while :; do
+		read -rp "  $1 [$2] " ans || ans=
+		ans=${ans:-$2}
+		if [[ $ans =~ $3 ]]; then VAL=$ans; return; fi
+		echo "    not a valid value"
+	done
+}
 
-if [ "$LIVE" = 1 ] && [ "$(id -u)" != 0 ]; then
-	command -v sudo >/dev/null || die "run as root (sudo not found)"
-	say "setup: needs root, running through sudo"
-	exec sudo -- "$(readlink -f "$0")" "${ARGS[@]}"
+echo "steamdeck setup: answer a few questions; nothing changes until you confirm at the end."
+echo
+
+echo "Programs"
+ask_yn "Install ProtonUp and Flatseal (into ~/.local/bin, with menu entries)?" y; DO_INSTALL=$YES
+DO_TIMER=0
+if [ "$DO_INSTALL" = 1 ]; then
+	ask_yn "Update Proton-GE once a week in the background?" n; DO_TIMER=$YES
 fi
 
-P() { printf '%s%s' "$ROOT" "$1"; } # a path under the root
+echo
+echo "System (asks for your sudo password once)"
+ask_yn "OOM guard: kill the game instead of freezing the Deck when memory runs out?" y; DO_OOM=$YES
+ask_yn "Memory settings tuned for zram (swappiness, cache pressure)?" y; DO_SYSCTL=$YES
+SWAPPINESS=100
+if [ "$DO_SYSCTL" = 1 ]; then
+	ask_val "swappiness (0-200, 100 suits zram)" 100 '^([0-9]|[1-9][0-9]|1[0-9][0-9]|200)$'; SWAPPINESS=$VAL
+fi
+echo "    swap now: $(free -h 2>/dev/null | awk '/^Swap:/{print $2" total, "$3" used"}')"
+ask_val "Swap file size, e.g. 8G or 16G (Enter keeps it)" keep '^(keep|[0-9]+[GgMm])$'; SWAPSIZE=$VAL
+ask_yn "Enable ssh so you can log in from another computer?" n; DO_SSH=$YES
 
-run() {
-	if [ "$LIVE" = 1 ]; then
-		"$@"
-	else
-		printf '+ %s\n' "$*"
-	fi
-}
+# --- the plan -------------------------------------------------------------
+INSTALL_CMD=()
+if [ "$DO_INSTALL" = 1 ]; then
+	INSTALL_CMD=("$HERE/scripts/install" "${DRY[@]}")
+	[ -d "$HERE/dist" ] && INSTALL_CMD+=(--from "$HERE/dist")
+	[ "$DO_TIMER" = 1 ] && INSTALL_CMD+=(--timer)
+fi
+SYSTEM_CMD=()
+if [ "$DO_OOM$DO_SYSCTL$DO_SSH" != 000 ] || [ "$SWAPSIZE" != keep ]; then
+	SYSTEM_CMD=("$HERE/scripts/system" "${DRY[@]}" "${ROOTOPT[@]}")
+	[ "$DO_SYSCTL" = 1 ] && SYSTEM_CMD+=(--swappiness "$SWAPPINESS")
+	[ "$DO_OOM" = 1 ] && SYSTEM_CMD+=(oom)
+	[ "$DO_SYSCTL" = 1 ] && SYSTEM_CMD+=(sysctl)
+	[ "$SWAPSIZE" != keep ] && SYSTEM_CMD+=(swapfile "$SWAPSIZE")
+	[ "$DO_SSH" = 1 ] && SYSTEM_CMD+=(ssh)
+fi
 
-managed() { [ -f "$1" ] && head -1 "$1" | grep -qF "$MARK"; }
+echo
+echo "This will:"
+[ "$DO_INSTALL" = 1 ] && echo "  - install ProtonUp and Flatseal$([ "$DO_TIMER" = 1 ] && echo ', with a weekly Proton-GE update')"
+[ "$DO_OOM" = 1 ] && echo "  - set up the OOM guard (systemd-oomd)"
+[ "$DO_SYSCTL" = 1 ] && echo "  - write memory settings (swappiness $SWAPPINESS)"
+[ "$SWAPSIZE" != keep ] && echo "  - resize the swap file to $SWAPSIZE"
+[ "$DO_SSH" = 1 ] && echo "  - enable ssh"
+if [ ${#INSTALL_CMD[@]} -eq 0 ] && [ ${#SYSTEM_CMD[@]} -eq 0 ]; then
+	echo "  (nothing)"
+	exit 0
+fi
+echo
+ask_yn "Go ahead?" y
+[ "$YES" = 1 ] || { echo "cancelled, nothing changed"; exit 0; }
 
-# write_conf PATH  (content on stdin); PATH is absolute, before the root is applied
-write_conf() {
-	local rel=$1 path
-	path=$(P "$rel")
-	if [ -e "$path" ] && ! managed "$path"; then
-		cat >/dev/null
-		say "skip $rel: it exists and was not written by this script"
-		return 0
-	fi
-	if [ "$DRY" = 1 ]; then
-		say "would write $rel"
-		cat >/dev/null
-		return 0
-	fi
-	mkdir -p "$(dirname "$path")"
-	{
-		printf '%s\n' "$MARK"
-		cat
-	} >"$path.tmp.$$"
-	mv -f "$path.tmp.$$" "$path"
-	say "wrote $rel"
-}
-
-have_systemd() { [ "$LIVE" = 0 ] || command -v systemctl >/dev/null; }
-
-action_oom() {
-	say "== oom: systemd-oomd"
-	write_conf /etc/systemd/oomd.conf.d/10-steamdeck.conf <<'CONF'
-# When swap is 90% full, or a cgroup stalls on memory for 20 s at 60% pressure, systemd-oomd kills the
-# worst offender in the user's slice (the game) instead of letting the whole machine thrash.
-[OOM]
-SwapUsedLimit=90%
-DefaultMemoryPressureLimit=60%
-DefaultMemoryPressureDurationSec=20s
-CONF
-	write_conf /etc/systemd/system/-.slice.d/10-steamdeck-oomd.conf <<'CONF'
-[Slice]
-ManagedOOMSwap=kill
-CONF
-	write_conf /etc/systemd/system/user@.service.d/10-steamdeck-oomd.conf <<'CONF'
-[Service]
-ManagedOOMMemoryPressure=kill
-ManagedOOMMemoryPressureLimit=60%
-CONF
-	write_conf /etc/systemd/user/gamescope-session-plus@.service.d/10-steamdeck-oomd.conf <<'CONF'
-# keep the Gaming Mode compositor out of oomd's reach: the game goes first
-[Service]
-ManagedOOMPreference=avoid
-CONF
-	if have_systemd; then
-		run systemctl daemon-reload
-		if [ "$LIVE" = 0 ] || systemctl cat systemd-oomd.service >/dev/null 2>&1; then
-			run systemctl enable --now systemd-oomd.service
-		else
-			say "warning: systemd-oomd.service does not exist on this system; the config is in place for when it does"
-		fi
-	fi
-}
-
-action_sysctl() {
-	say "== sysctl"
-	write_conf /etc/sysctl.d/99-steamdeck-setup.conf <<CONF
-# zram is the first swap and it is fast: swap early, keep the file cache a bit longer, read one page at a time
-vm.swappiness = $SWAPPINESS
-vm.vfs_cache_pressure = 50
-vm.page-cluster = 0
-CONF
-	run sysctl -q -p "$(P /etc/sysctl.d/99-steamdeck-setup.conf)"
-}
-
-action_ssh() {
-	say "== ssh"
-	have_systemd || { say "no systemd here"; return 0; }
-	if [ "$LIVE" = 1 ] && ! systemctl cat sshd.service >/dev/null 2>&1; then
-		say "warning: sshd.service does not exist on this system"
-		return 0
-	fi
-	run systemctl enable --now sshd.service
-}
-
-action_swapfile() {
-	local size=$1 file=/home/swapfile free_kb need_kb
-	say "== swapfile $size"
-	case $size in [0-9]*[GgMm]) ;; *) die "swapfile SIZE looks like 8G or 16G" ;; esac
-	if [ "$LIVE" = 1 ]; then
-		[ -e "$file" ] || die "$file does not exist: this only resizes the swap file SteamOS made"
-		free_kb=$(df -Pk /home | awk 'NR==2{print $4}')
-		case $size in
-			*[Gg]) need_kb=$(( ${size%[Gg]} * 1024 * 1024 )) ;;
-			*) need_kb=$(( ${size%[Mm]} * 1024 )) ;;
-		esac
-		[ "$free_kb" -gt $(( need_kb + 5 * 1024 * 1024 )) ] || die "not enough free space on /home for $size plus 5G headroom"
-	fi
-	run swapoff "$file"
-	run rm -f "$file"
-	run fallocate -l "$size" "$file"
-	run chmod 600 "$file"
-	run mkswap "$file"
-	run swapon "$file"
-}
-
-action_status() {
-	say "== status"
-	local f
-	for f in /etc/systemd/oomd.conf.d/10-steamdeck.conf /etc/sysctl.d/99-steamdeck-setup.conf; do
-		if managed "$(P "$f")"; then say "present  $f"; else say "absent   $f"; fi
-	done
-	if [ "$LIVE" = 1 ]; then
-		if command -v systemctl >/dev/null; then
-			say "systemd-oomd: $(systemctl is-active systemd-oomd.service 2>/dev/null || true)"
-			say "sshd:         $(systemctl is-active sshd.service 2>/dev/null || true)"
-		fi
-		say "swappiness:   $(cat /proc/sys/vm/swappiness 2>/dev/null || echo ?)"
-		swapon --show 2>/dev/null || true
-	fi
-}
-
-action_undo() {
-	say "== undo"
-	local f
-	for f in \
-		/etc/systemd/oomd.conf.d/10-steamdeck.conf \
-		/etc/systemd/system/-.slice.d/10-steamdeck-oomd.conf \
-		/etc/systemd/system/user@.service.d/10-steamdeck-oomd.conf \
-		/etc/systemd/user/gamescope-session-plus@.service.d/10-steamdeck-oomd.conf \
-		/etc/sysctl.d/99-steamdeck-setup.conf; do
-		if managed "$(P "$f")"; then
-			if [ "$DRY" = 1 ]; then
-				say "would remove $f"
-			else
-				rm -f "$(P "$f")"
-				rmdir "$(dirname "$(P "$f")")" 2>/dev/null || true
-				say "removed $f"
-			fi
-		fi
-	done
-	if have_systemd; then run systemctl daemon-reload; fi
-	say "sshd and the swap file are left as they are"
-}
-
-i=0
-while [ $i -lt ${#ACTIONS[@]} ]; do
-	a=${ACTIONS[$i]}
-	case $a in
-		oom) action_oom ;;
-		sysctl) action_sysctl ;;
-		ssh) action_ssh ;;
-		all) action_oom; action_sysctl; action_ssh ;;
-		status) action_status ;;
-		undo) action_undo ;;
-		swapfile)
-			i=$((i + 1))
-			[ $i -lt ${#ACTIONS[@]} ] || die "swapfile needs a size (8G, 16G)"
-			action_swapfile "${ACTIONS[$i]}"
-			;;
-		*) die "unknown action '$a' (oom, sysctl, swapfile SIZE, ssh, all, status, undo)" ;;
-	esac
-	i=$((i + 1))
-done
+echo
+[ ${#INSTALL_CMD[@]} -gt 0 ] && "${INSTALL_CMD[@]}"
+[ ${#SYSTEM_CMD[@]} -gt 0 ] && "${SYSTEM_CMD[@]}"
+echo
+echo "done. To undo the system part later: scripts/system undo"

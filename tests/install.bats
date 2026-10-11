@@ -16,7 +16,7 @@ setup() {
 teardown() { rm -rf "$T"; }
 
 @test "installs both binaries, menu entries and icons under the prefix" {
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p"
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p"
 	[ "$status" -eq 0 ]
 	[ -x "$T/p/bin/protonup" ]
 	[ -x "$T/p/bin/flatseal" ]
@@ -27,7 +27,7 @@ teardown() { rm -rf "$T"; }
 }
 
 @test "--only installs just one tool" {
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p" --only flatseal
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p" --only flatseal
 	[ "$status" -eq 0 ]
 	[ -x "$T/p/bin/flatseal" ]
 	[ ! -e "$T/p/bin/protonup" ]
@@ -35,7 +35,7 @@ teardown() { rm -rf "$T"; }
 
 @test "a tampered binary is refused and nothing is installed" {
 	echo tampered >> "$DIST/protonup-x86_64-linux"
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p"
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"checksum mismatch"* ]]
 	[ ! -e "$T/p/bin/protonup" ]
@@ -44,35 +44,35 @@ teardown() { rm -rf "$T"; }
 
 @test "a binary missing from SHA256SUMS is refused" {
 	grep -v flatseal "$DIST/SHA256SUMS" > "$T/s" && mv "$T/s" "$DIST/SHA256SUMS"
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p"
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"not listed in SHA256SUMS"* ]]
 }
 
 @test "--dry-run changes nothing" {
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p" --dry-run
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p" --dry-run
 	[ "$status" -eq 0 ]
 	[ ! -e "$T/p" ]
 	[[ "$output" == *"+ install"* ]]
 }
 
 @test "--no-desktop writes only the binaries" {
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p" --no-desktop
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p" --no-desktop
 	[ "$status" -eq 0 ]
 	[ -x "$T/p/bin/protonup" ]
 	[ ! -e "$T/p/share" ]
 }
 
 @test "--timer writes the update service and timer" {
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p" --timer
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p" --timer
 	[ "$status" -eq 0 ]
 	grep -q "^ExecStart=$T/p/bin/protonup install latest$" "$T/home/.config/systemd/user/protonup-update.service"
 	grep -q '^OnCalendar=weekly$' "$T/home/.config/systemd/user/protonup-update.timer"
 }
 
 @test "--uninstall removes what was installed" {
-	"$ROOT/install" --from "$DIST" --prefix "$T/p" --timer
-	run "$ROOT/install" --uninstall --prefix "$T/p"
+	"$ROOT/scripts/install" --from "$DIST" --prefix "$T/p" --timer
+	run "$ROOT/scripts/install" --uninstall --prefix "$T/p"
 	[ "$status" -eq 0 ]
 	[ ! -e "$T/p/bin/protonup" ]
 	[ ! -e "$T/p/share/applications/flatseal.desktop" ]
@@ -80,16 +80,16 @@ teardown() { rm -rf "$T"; }
 }
 
 @test "installing twice is fine (idempotent)" {
-	"$ROOT/install" --from "$DIST" --prefix "$T/p"
-	run "$ROOT/install" --from "$DIST" --prefix "$T/p"
+	"$ROOT/scripts/install" --from "$DIST" --prefix "$T/p"
+	run "$ROOT/scripts/install" --from "$DIST" --prefix "$T/p"
 	[ "$status" -eq 0 ]
 	[ -x "$T/p/bin/protonup" ]
 }
 
 @test "an unknown tool or option is an error" {
-	run "$ROOT/install" --only nothing --from "$DIST"
+	run "$ROOT/scripts/install" --only nothing --from "$DIST"
 	[ "$status" -ne 0 ]
-	run "$ROOT/install" --bogus
+	run "$ROOT/scripts/install" --bogus
 	[ "$status" -ne 0 ]
 }
 
@@ -99,7 +99,7 @@ teardown() { rm -rf "$T"; }
 	(cd "$DIST" && exec python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
 	srv=$!
 	for _ in 1 2 3 4 5 6 7 8 9 10; do curl -fsS "http://127.0.0.1:$port/SHA256SUMS" >/dev/null 2>&1 && break; sleep 0.3; done
-	run env STEAMDECK_RELEASE_URL="http://127.0.0.1:$port" "$ROOT/install" --prefix "$T/p"
+	run env STEAMDECK_RELEASE_URL="http://127.0.0.1:$port" "$ROOT/scripts/install" --prefix "$T/p"
 	kill "$srv" 2>/dev/null || true
 	[ "$status" -eq 0 ]
 	[ "$("$T/p/bin/flatseal")" = flatseal-fake ]

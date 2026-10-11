@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # build - compile protonup and flatseal into dist/: one binary each plus SHA256SUMS.
 #
-#   ./build                  release build with the host toolchain
-#   ./build --portable       link against an old glibc with zig, so one binary runs on every SteamOS
-#   ./build --out DIR        write the files to DIR instead of ./dist
-#   ./build --publish TAG    after building, create GitHub release TAG with the files (needs gh login)
+#   scripts/build                  release build with the host toolchain
+#   scripts/build --portable       link against an old glibc with zig, so one binary runs on every SteamOS
+#   scripts/build --out DIR        write the files to DIR instead of ./dist
+#   scripts/build --publish TAG    after building, create GitHub release TAG with the files (needs gh login)
 #
 # The install script downloads these files from the latest release.
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
 
 OUT=dist
 PORTABLE=0

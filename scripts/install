@@ -3,8 +3,8 @@
 # menu entries for Desktop Mode, optionally a weekly Proton-GE update timer. No root, nothing else is
 # installed: no Python, no Qt, no GTK.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/install | bash
-#   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/install | bash -s -- --timer
+#   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/scripts/install | bash
+#   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/scripts/install | bash -s -- --timer
 #
 # options
 #   --only NAME        install just protonup or flatseal (repeatable)
@@ -17,7 +17,7 @@
 #   --dry-run          print what would happen, change nothing
 #   -h, --help         this text
 #
-# Machine-wide tuning (OOM guard, swap, sysctl, ssh) is the separate `setup` script.
+# Machine-wide tuning (OOM guard, swap, sysctl, ssh) is the `setup` wizard in the repo root (scripts/system does the work).
 set -euo pipefail
 
 REPO=${STEAMDECK_REPO:-Gucixdev/steamdeck}
