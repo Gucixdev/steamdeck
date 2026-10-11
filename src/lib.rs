@@ -8,6 +8,7 @@ pub mod cli_protonup;
 pub mod launcher;
 pub mod log;
 pub mod steaminstalls;
+pub mod storage_gui;
 pub mod system;
 pub mod ui;
 
@@ -19,6 +20,7 @@ pub mod proton_gui;
 pub mod recommend;
 pub mod sources;
 pub mod steam;
+pub mod storage;
 
 // flatseal: Flatpak permission overrides and portal permissions
 pub mod flatapps;

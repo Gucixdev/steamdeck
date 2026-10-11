@@ -177,7 +177,11 @@ pub struct Game {
 
 /// The Steam root itself plus every library folder listed in libraryfolders.vdf.
 pub fn libraries(root: &Path) -> Vec<PathBuf> {
+    // the same folder can be named twice (a symlinked ~/.local/share/Steam and the path in
+    // libraryfolders.vdf), so compare real paths and keep one
+    let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let mut out = vec![root.to_path_buf()];
+    let mut seen = vec![real(root)];
     if let Ok(t) = fs::read_to_string(root.join("steamapps/libraryfolders.vdf")) {
         if let Ok(items) = parse(&t) {
             if let Some(V::Obj(lf)) = child(&items, "libraryfolders") {
@@ -185,7 +189,9 @@ pub fn libraries(root: &Path) -> Vec<PathBuf> {
                     if let V::Obj(o) = v {
                         if let Some(p) = text(o, "path") {
                             let p = PathBuf::from(p);
-                            if !out.contains(&p) {
+                            let r = real(&p);
+                            if !seen.contains(&r) {
+                                seen.push(r);
                                 out.push(p);
                             }
                         }
@@ -608,6 +614,25 @@ mod tests {
         set_launch_options_checked(&root, 570, None, false).unwrap();
         assert!(!launch_options(&root).contains_key(&570));
         assert!(cfg.join("localconfig.vdf.steamdeck-bak").is_file());
+    }
+
+    #[test]
+    fn a_library_named_twice_through_a_symlink_is_listed_once() {
+        let root = tmp("dup");
+        let link = std::env::temp_dir().join(format!("games-duplink-{}", std::process::id()));
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        fs::create_dir_all(root.join("steamapps")).unwrap();
+        fs::write(
+            root.join("steamapps/libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
+                link.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(libraries(&root).len(), 1);
+        let _ = fs::remove_file(&link);
     }
 
     #[test]

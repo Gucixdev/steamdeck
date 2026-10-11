@@ -680,12 +680,13 @@ impl App {
                 .padding(8)
                 .width(Fill);
                 // launch options: presets for the things that matter on a Deck, or what is set already
-                const PRESETS: [(&str, &str); 5] = [
+                const PRESETS: [(&str, &str); 6] = [
                     ("none", ""),
                     ("GameMode", "gamemoderun %command%"),
                     ("MangoHud overlay", "mangohud %command%"),
                     ("FSR upscaling", "WINE_FULLSCREEN_FSR=1 %command%"),
                     ("FSR + MangoHud", "WINE_FULLSCREEN_FSR=1 mangohud %command%"),
+                    ("Proton log (~/steam-APPID.log)", "PROTON_LOG=1 %command%"),
                 ];
                 let cur_l = r.launch.get(&appid).cloned().unwrap_or_default();
                 let mut l_opts: Vec<String> = PRESETS.iter().map(|(n, _)| n.to_string()).collect();

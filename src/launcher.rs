@@ -4,7 +4,7 @@ use crate::ui::{
     accent_button, card, nav_item, page_title, quiet_button, shell, theme, warning_card, ACCENT,
     PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use crate::{flatapps, health, log, proton_gui, seal_gui, steaminstalls, system};
+use crate::{flatapps, health, log, proton_gui, seal_gui, steaminstalls, storage_gui, system};
 use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
@@ -16,6 +16,7 @@ pub enum Section {
     Games,
     Get,
     Installed,
+    Storage,
     Perms,
     System,
     Steam,
@@ -46,6 +47,7 @@ enum Msg {
     Steam(steaminstalls::Msg),
     Apps(flatapps::Msg),
     Health(health::Msg),
+    Storage(storage_gui::Msg),
     RefreshLog,
     Key(iced::keyboard::Key, iced::keyboard::Modifiers),
 }
@@ -58,6 +60,7 @@ struct App {
     steam: steaminstalls::State,
     apps: flatapps::State,
     health: health::State,
+    storage: storage_gui::State,
     seen: [Option<String>; 2],
 }
 
@@ -90,6 +93,7 @@ impl App {
         let (steam, wt) = steaminstalls::State::new();
         let (apps, at) = flatapps::State::new();
         let (health, ht) = health::State::new();
+        let (storage, gt) = storage_gui::State::new();
         let section = match (start.section, start.tab.as_deref()) {
             (Section::Games, Some("available")) => Section::Get,
             (Section::Games, Some("installed")) => Section::Installed,
@@ -103,6 +107,7 @@ impl App {
             steam,
             apps,
             health,
+            storage,
             seen: [None, None],
         };
         (
@@ -113,6 +118,7 @@ impl App {
                 yt.map(Msg::System),
                 at.map(Msg::Apps),
                 ht.map(Msg::Health),
+                gt.map(Msg::Storage),
                 wt.map(Msg::Steam),
             ]),
         )
@@ -148,6 +154,7 @@ impl App {
             Msg::Steam(m) => self.steam.update(m).map(Msg::Steam),
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::Health(m) => self.health.update(m).map(Msg::Health),
+            Msg::Storage(m) => self.storage.update(m).map(Msg::Storage),
             Msg::RefreshLog => Task::none(),
             // Alt+1..4 switch the tabs (plain digits would land in the text boxes)
             Msg::Key(key, mods) => {
@@ -223,6 +230,7 @@ impl App {
                 column![
                     nav("Proton for my games", Section::Games),
                     nav("Download Proton", Section::Get),
+                    nav("Game storage", Section::Storage),
                 ]
                 .spacing(8)
                 .into(),
@@ -293,6 +301,12 @@ impl App {
             Section::Apps => column![
                 page_title("Settings: Flatpak apps", "Uninstall apps, delete what they keep, and free unused runtimes."),
                 self.apps.view().map(Msg::Apps),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::Storage => column![
+                page_title("Game storage", "Prefixes and shader caches. A game that will not start often needs its prefix reset; leftovers of removed games can go."),
+                self.storage.view().map(Msg::Storage),
             ]
             .spacing(SPACING)
             .into(),
