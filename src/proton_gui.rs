@@ -34,6 +34,8 @@ pub enum Msg {
     All(Vec<RootInfo>),
     /// Steam root, appid, launch options ("" = none)
     SetLaunch(PathBuf, u64, String),
+    /// the text being typed in a game's launch-options box
+    LaunchEdit(PathBuf, u64, String),
     LaunchSet(Result<(), String>),
     /// ask protondb.com for the ratings of the listed games (on request only)
     CheckDb,
@@ -139,6 +141,7 @@ pub struct App {
     game_filter: String,
     protondb: HashMap<u64, String>,
     db_busy: bool,
+    launch_edit: HashMap<(PathBuf, u64), String>,
 }
 
 impl App {
@@ -179,6 +182,7 @@ impl App {
             game_filter: String::new(),
             protondb: crate::protondb::cached(),
             db_busy: false,
+            launch_edit: HashMap::new(),
         };
         let t = Task::batch([app.fetch_page(1), app.load_all()]);
         (app, t)
@@ -290,7 +294,11 @@ impl App {
                 }
                 self.all = v;
             }
+            Msg::LaunchEdit(root, appid, t) => {
+                self.launch_edit.insert((root, appid), t);
+            }
             Msg::SetLaunch(root, appid, opts) => {
+                self.launch_edit.remove(&(root.clone(), appid));
                 self.error = None;
                 self.notice = None;
                 return Task::perform(
@@ -679,39 +687,60 @@ impl App {
                 .text_size(SMALL_SIZE)
                 .padding(8)
                 .width(Fill);
-                // launch options: presets for the things that matter on a Deck, or what is set already
-                const PRESETS: [(&str, &str); 6] = [
-                    ("none", ""),
-                    ("GameMode", "gamemoderun %command%"),
-                    ("MangoHud overlay", "mangohud %command%"),
-                    ("FSR upscaling", "WINE_FULLSCREEN_FSR=1 %command%"),
-                    ("FSR + MangoHud", "WINE_FULLSCREEN_FSR=1 mangohud %command%"),
-                    ("Proton log (~/steam-APPID.log)", "PROTON_LOG=1 %command%"),
-                ];
-                let cur_l = r.launch.get(&appid).cloned().unwrap_or_default();
-                let mut l_opts: Vec<String> = PRESETS.iter().map(|(n, _)| n.to_string()).collect();
-                let l_sel = match PRESETS.iter().find(|(_, v)| *v == cur_l) {
-                    Some((n, _)) => n.to_string(),
-                    None => {
-                        let c = format!("custom: {cur_l}");
-                        l_opts.push(c.clone());
-                        c
-                    }
+                // launch options: checkboxes for the usual things plus the command itself
+                let key = (r.root.clone(), appid);
+                let saved = r.launch.get(&appid).cloned().unwrap_or_default();
+                let shown = self
+                    .launch_edit
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| saved.clone());
+                let mut line_a = row![].spacing(10);
+                let mut line_b = row![].spacing(10);
+                for (i, f) in crate::launch::FLAGS.into_iter().enumerate() {
+                    let root = r.root.clone();
+                    let base = saved.clone();
+                    let target = if i < 2 { &mut line_a } else { &mut line_b };
+                    *target = std::mem::replace(target, row![]).push(
+                        iced::widget::checkbox(crate::launch::has(&saved, f))
+                            .label(f.label())
+                            .size(18)
+                            .text_size(SMALL_SIZE)
+                            .on_toggle(move |on| {
+                                Msg::SetLaunch(
+                                    root.clone(),
+                                    appid,
+                                    crate::launch::toggle(&base, f, on),
+                                )
+                            }),
+                    );
+                }
+                let root_e = r.root.clone();
+                let root_s = r.root.clone();
+                let shown_s = shown.clone();
+                let mut input_row =
+                    row![
+                        iced::widget::text_input("command, e.g. gamemoderun %command%", &shown)
+                            .on_input(move |t| Msg::LaunchEdit(root_e.clone(), appid, t))
+                            .on_submit(Msg::SetLaunch(root_s, appid, shown_s))
+                            .padding(6)
+                            .size(SMALL_SIZE)
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center);
+                if shown != saved {
+                    input_row = input_row.push(
+                        button(text("Save").size(SMALL_SIZE))
+                            .padding([4, 10])
+                            .on_press(Msg::SetLaunch(r.root.clone(), appid, shown.clone()))
+                            .style(primary_button()),
+                    );
+                }
+                let launch_dd: Element<Msg> = if appid == 0 {
+                    text("per game below").size(SMALL_SIZE).color(DIM).into()
+                } else {
+                    column![line_a, line_b, input_row].spacing(4).into()
                 };
-                let root2 = r.root.clone();
-                let launch_dd = pick_list(l_opts, Some(l_sel), move |n| {
-                    let v = PRESETS
-                        .iter()
-                        .find(|(p, _)| *p == n)
-                        .map(|(_, v)| v.to_string());
-                    match v {
-                        Some(v) => Msg::SetLaunch(root2.clone(), appid, v),
-                        None => Msg::Tab(Tab::Games), // picking the "custom" line again changes nothing
-                    }
-                })
-                .text_size(SMALL_SIZE)
-                .padding(8)
-                .width(Fill);
                 let tier = self.protondb.get(&appid).cloned();
                 // a suggestion with its reason, and one button to take it
                 let installed_names: Vec<String> =
@@ -766,11 +795,11 @@ impl App {
                 };
                 col = col.push(table_row(
                     vec![
-                        (name_cell, 5),
+                        (name_cell, 4),
                         (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 1),
                         (tier_text, 1),
-                        (dropdown.into(), 4),
-                        (launch_dd.into(), 3),
+                        (dropdown.into(), 3),
+                        (launch_dd, 6),
                     ],
                     n % 2 == 1,
                 ));

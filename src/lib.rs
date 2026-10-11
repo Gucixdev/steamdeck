@@ -27,6 +27,7 @@ pub mod flatapps;
 pub mod flatpak;
 pub mod health;
 pub mod keyfile;
+pub mod launch;
 pub mod perms;
 pub mod portals;
 pub mod protondb;
