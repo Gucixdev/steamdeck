@@ -25,9 +25,17 @@ pub fn user_dir() -> PathBuf {
 
 pub const GLOBAL: &str = "global";
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() < 256
+/// An application id or table/object name that is safe to put in a path or a command: letters,
+/// digits, `.`, `_`, `-`; it starts with a letter or digit (so never `.`, `..` or an option) and has no
+/// `..` inside.
+pub fn valid_id(id: &str) -> bool {
+    id.len() < 256
+        && id
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphanumeric())
+            .unwrap_or(false)
+        && !id.contains("..")
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
@@ -201,5 +209,23 @@ mod tests {
             "ids that are paths are refused"
         );
         assert!(save_override("a/b", &kf).is_err());
+    }
+    #[test]
+    fn ids_that_could_climb_or_act_as_options_are_refused() {
+        for bad in [
+            "", ".", "..", "../x", "a/b", ".hidden", "-rf", "a..b", "x y", "x;y", "a\0b", "é",
+        ] {
+            assert!(!valid_id(bad), "'{bad}' must not be valid");
+        }
+        for good in [
+            "org.mozilla.firefox",
+            "com.valvesoftware.Steam",
+            "global",
+            "io.github.X-Y_z",
+        ] {
+            assert!(valid_id(good), "'{good}'");
+        }
+        assert!(override_path("..").is_err());
+        assert!(override_path("a/b").is_err());
     }
 }

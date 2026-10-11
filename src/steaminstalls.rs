@@ -203,6 +203,10 @@ impl State {
             Msg::Ask(i) => self.asking = Some(i),
             Msg::Cancel => self.asking = None,
             Msg::Remove(i) => {
+                // only what the user was just asked about, never a stray message
+                if self.asking != Some(i) {
+                    return Task::none();
+                }
                 self.asking = None;
                 let Some(inst) = self.found.as_ref().and_then(|f| f.get(i)).cloned() else {
                     return Task::none();
@@ -473,5 +477,78 @@ mod tests {
             Some("user")
         );
         assert_eq!(flatpak_installation("org.a.B\tuser\n"), None);
+    }
+    fn steam_like(base: &std::path::Path, name: &str) -> PathBuf {
+        let d = base.join(name);
+        std::fs::create_dir_all(d.join("steamapps")).unwrap();
+        std::fs::write(d.join("steamapps/appmanifest_1.acf"), "x").unwrap();
+        d
+    }
+
+    #[test]
+    fn delete_folder_refuses_everything_that_is_not_a_steam_folder() {
+        let base = std::env::temp_dir().join(format!("sdel2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // a folder called Steam without steam files in it
+        let lookalike = base.join("a/Steam");
+        std::fs::create_dir_all(&lookalike).unwrap();
+        std::fs::write(lookalike.join("my-thesis.odt"), "keep").unwrap();
+        assert!(delete_folder(&lookalike).contains("refusing"));
+        assert!(lookalike.join("my-thesis.odt").is_file());
+        // steam files but not named Steam
+        let other = steam_like(&base, "Games");
+        assert!(delete_folder(&other).contains("refusing"));
+        assert!(other.join("steamapps").is_dir());
+        // the home directory and the root
+        assert!(delete_folder(&dirs::home_dir().unwrap()).contains("refusing"));
+        assert!(delete_folder(std::path::Path::new("/")).contains("refusing"));
+        // a path that does not exist
+        assert!(!delete_folder(&base.join("nope")).starts_with("deleted"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn delete_folder_does_not_follow_links_inside_the_folder() {
+        let base = std::env::temp_dir().join(format!("sdel3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let outside = base.join("photos");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("holiday.jpg"), "keep").unwrap();
+        let steam = steam_like(&base, "Steam");
+        std::os::unix::fs::symlink(&outside, steam.join("steamapps/linked")).unwrap();
+        std::os::unix::fs::symlink(outside.join("holiday.jpg"), steam.join("file-link")).unwrap();
+        let msg = delete_folder(&steam);
+        assert!(
+            msg.starts_with("deleted") || msg.starts_with("emptied"),
+            "{msg}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("holiday.jpg")).unwrap(),
+            "keep"
+        );
+        assert!(!steam.join("steamapps").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn removing_needs_the_question_to_have_been_asked_first() {
+        let mut s = State {
+            found: Some(vec![Install {
+                kind: Kind::DataOnly,
+                label: "x".into(),
+                data: Some(PathBuf::from("/nonexistent/Steam")),
+                games: 0,
+                locked: None,
+            }]),
+            asking: None,
+            output: String::new(),
+        };
+        let _ = s.update(Msg::Remove(0));
+        assert!(s.output.is_empty(), "a stray Remove does nothing");
+        let _ = s.update(Msg::Ask(0));
+        let _ = s.update(Msg::Cancel);
+        let _ = s.update(Msg::Remove(0));
+        assert!(s.output.is_empty(), "after Cancel it does nothing either");
     }
 }

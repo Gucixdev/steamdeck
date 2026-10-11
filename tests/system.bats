@@ -89,3 +89,41 @@ teardown() { rm -rf "$T"; }
 	[[ "$output" == *"present  /etc/systemd/oomd.conf.d/10-steamdeck.conf"* ]]
 	[[ "$output" == *"absent   /etc/sysctl.d/99-steamdeck-setup.conf"* ]]
 }
+
+# ---- safety ---------------------------------------------------------------------------------------
+
+@test "with --root nothing outside the root is written" {
+	before=$(ls -la /etc/sysctl.d /etc/systemd 2>/dev/null | md5sum)
+	run "$ROOT/setup" --system --root "$T" all
+	[ "$status" -eq 0 ]
+	after=$(ls -la /etc/sysctl.d /etc/systemd 2>/dev/null | md5sum)
+	[ "$before" = "$after" ]
+	[ -e "$T/etc/sysctl.d/99-steamdeck-setup.conf" ]
+}
+
+@test "an existing managed file is replaced as a whole, an unmanaged one in the same directory is not touched" {
+	mkdir -p "$T/etc/sysctl.d"
+	printf 'vm.swappiness = 5\n' > "$T/etc/sysctl.d/10-mine.conf"
+	"$ROOT/setup" --system --root "$T" sysctl >/dev/null
+	"$ROOT/setup" --system --root "$T" --swappiness 70 sysctl >/dev/null
+	[ "$(cat "$T/etc/sysctl.d/10-mine.conf")" = 'vm.swappiness = 5' ]
+	grep -q '^vm.swappiness = 70$' "$T/etc/sysctl.d/99-steamdeck-setup.conf"
+	[ "$(grep -c swappiness "$T/etc/sysctl.d/99-steamdeck-setup.conf")" -eq 1 ]
+}
+
+@test "undo twice and undo with nothing written are harmless" {
+	run "$ROOT/setup" --system --root "$T" undo
+	[ "$status" -eq 0 ]
+	"$ROOT/setup" --system --root "$T" oom >/dev/null
+	"$ROOT/setup" --system --root "$T" undo >/dev/null
+	run "$ROOT/setup" --system --root "$T" undo
+	[ "$status" -eq 0 ]
+}
+
+@test "a swap size that is not a size never reaches rm or fallocate" {
+	for bad in '8G; rm -rf /' '$(id)' '-1G' 'G' ''; do
+		run "$ROOT/setup" --system --root "$T" swapfile "$bad"
+		[ "$status" -ne 0 ]
+		[[ "$output" != *"+ rm"* ]]
+	done
+}

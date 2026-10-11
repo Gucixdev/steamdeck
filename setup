@@ -118,7 +118,8 @@ programs_uninstall() {
 		prun rm -f "$BIN/$n" "$APPDIR/$n.desktop" "$ICONDIR/$n.svg"
 	done
 	for n in "${CMDS[@]}"; do
-		prun rm -f "$BIN/$n"
+		# only our own link; a real protonup/flatseal of the user's is not ours to remove
+		if [ -L "$BIN/$n" ] && [ "$(readlink "$BIN/$n")" = steamdeck ]; then prun rm -f "$BIN/$n"; fi
 	done
 	if [ -f "$UNITDIR/protonup-update.timer" ]; then
 		nosystemd || prun systemctl --user disable --now protonup-update.timer 2>/dev/null || true
@@ -206,7 +207,13 @@ programs_install() {
 	fi
 
 	for n in "${CMDS[@]}"; do
-		if [ "$DRY" = 1 ]; then printf '+ link %s/%s -> steamdeck\n' "$BIN" "$n"; else ln -sfn steamdeck "$BIN/$n"; fi
+		# never replace a protonup/flatseal that is not our link (the user's own tool, or another package's)
+		if [ -e "$BIN/$n" ] || [ -L "$BIN/$n" ]; then
+			if [ -L "$BIN/$n" ] && [ "$(readlink "$BIN/$n")" = steamdeck ]; then continue; fi
+			say "skip $BIN/$n: it exists and is not ours"
+			continue
+		fi
+		if [ "$DRY" = 1 ]; then printf '+ link %s/%s -> steamdeck\n' "$BIN" "$n"; else ln -s steamdeck "$BIN/$n"; fi
 	done
 
 	if [ "$DESKTOP" = 1 ]; then
@@ -522,6 +529,8 @@ user_pref("media.peerconnection.ice.default_address_only", true);
 user_pref("extensions.autoDisableScopes", 0);
 // <<< steamdeck setup
 PREFS
+	# the first time, keep what was there; the file is replaced in one step either way
+	if [ -f "$js" ] && [ ! -e "$js.steamdeck-bak" ]; then cp -p "$js" "$js.steamdeck-bak"; fi
 	mv -f "$tmp" "$js"
 	say "wrote the privacy prefs to $js"
 	# uBlock Origin from addons.mozilla.org, dropped into the profile (Firefox picks it up at the next start)

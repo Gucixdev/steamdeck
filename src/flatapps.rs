@@ -41,10 +41,11 @@ pub fn parse_list(out: &str) -> Vec<Item> {
 }
 
 fn data_dir(id: &str) -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".var/app")
-        .join(id)
+    data_dir_in(&dirs::home_dir().unwrap_or_default(), id)
+}
+
+fn data_dir_in(home: &std::path::Path, id: &str) -> PathBuf {
+    home.join(".var/app").join(id)
 }
 
 fn dir_size(p: &std::path::Path) -> u64 {
@@ -63,11 +64,7 @@ fn dir_size(p: &std::path::Path) -> u64 {
 }
 
 fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() < 200
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    crate::flatpak::valid_id(id)
 }
 
 fn list() -> Vec<Item> {
@@ -138,6 +135,10 @@ impl State {
             Msg::Ask(i, a) => self.asking = Some((i, a)),
             Msg::Cancel => self.asking = None,
             Msg::Do(i, a) => {
+                // only the action the user was just asked to confirm
+                if self.asking.as_ref() != Some(&(i, a.clone())) {
+                    return Task::none();
+                }
                 self.asking = None;
                 let item = self.items.as_ref().and_then(|v| v.get(i)).cloned();
                 self.busy = true;
@@ -276,6 +277,10 @@ impl State {
 }
 
 fn run(item: Option<Item>, a: Action) -> String {
+    run_in(&dirs::home_dir().unwrap_or_default(), item, a)
+}
+
+fn run_in(home: &std::path::Path, item: Option<Item>, a: Action) -> String {
     let mut args: Vec<String> = Vec::new();
     let mut root = false;
     match (&a, &item) {
@@ -286,7 +291,7 @@ fn run(item: Option<Item>, a: Action) -> String {
             if !valid_id(&it.id) {
                 return format!("odd app id '{}'", it.id);
             }
-            let d = data_dir(&it.id);
+            let d = data_dir_in(home, &it.id);
             return match std::fs::remove_dir_all(&d) {
                 Ok(()) => format!("deleted {}", d.display()),
                 Err(e) => format!("could not delete {}: {e}", d.display()),
@@ -335,6 +340,7 @@ fn run(item: Option<Item>, a: Action) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn the_list_is_parsed_and_sorted_by_name() {
@@ -356,5 +362,55 @@ mod tests {
             data_bytes: 0,
         };
         assert!(run(Some(it), Action::DeleteData).contains("odd app id"));
+    }
+    fn item(id: &str) -> Item {
+        Item {
+            id: id.into(),
+            name: id.into(),
+            size: String::new(),
+            installation: "user".into(),
+            data_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn clearing_data_removes_only_that_apps_directory() {
+        let home = std::env::temp_dir().join(format!("fa-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        for app in ["org.a.A", "org.b.B"] {
+            fs::create_dir_all(home.join(".var/app").join(app).join("config")).unwrap();
+            fs::write(home.join(".var/app").join(app).join("config/file"), app).unwrap();
+        }
+        fs::write(home.join("Documents"), "keep").unwrap();
+        let msg = run_in(&home, Some(item("org.a.A")), Action::DeleteData);
+        assert!(msg.starts_with("deleted"), "{msg}");
+        assert!(!home.join(".var/app/org.a.A").exists());
+        assert_eq!(
+            fs::read_to_string(home.join(".var/app/org.b.B/config/file")).unwrap(),
+            "org.b.B"
+        );
+        assert_eq!(fs::read_to_string(home.join("Documents")).unwrap(), "keep");
+        // ids that could climb out are refused and nothing moves
+        for bad in ["..", "../..", "org.a/../org.b.B", "", "a b", "x;y"] {
+            let m = run_in(&home, Some(item(bad)), Action::DeleteData);
+            assert!(m.contains("odd app id"), "'{bad}': {m}");
+        }
+        assert!(home.join(".var/app/org.b.B").is_dir());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_action_runs_only_when_it_was_asked_about() {
+        let (mut s, _) = State::new();
+        s.items = Some(vec![item("org.a.A")]);
+        s.output.clear();
+        let _ = s.update(Msg::Do(0, Action::DeleteData));
+        assert!(s.output.is_empty(), "nothing was asked, nothing runs");
+        let _ = s.update(Msg::Ask(0, Action::Uninstall(false)));
+        let _ = s.update(Msg::Do(0, Action::DeleteData));
+        assert!(
+            s.output.is_empty(),
+            "a different action than the one asked is ignored"
+        );
     }
 }

@@ -93,3 +93,59 @@ teardown() { rm -rf "$T"; }
 	FIREFOX_PROFILE="$P" "$ROOT/setup" --firefox >/dev/null
 	[ "$(grep -c '>>> steamdeck setup' "$P/user.js")" -eq 1 ]
 }
+
+# ---- safety: nothing that is not ours is overwritten or removed ----------------------------------
+
+@test "a protonup of the user's own in bin/ is not replaced and not removed" {
+	mkdir -p "$T/p/bin"
+	printf '#!/bin/sh\necho mine\n' > "$T/p/bin/protonup"; chmod +x "$T/p/bin/protonup"
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"skip $T/p/bin/protonup"* ]]
+	[ "$("$T/p/bin/protonup")" = mine ]
+	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
+	[ "$("$T/p/bin/protonup")" = mine ]
+	[ ! -e "$T/p/bin/steamdeck" ]
+}
+
+@test "uninstall leaves every unrelated file in bin, applications and icons" {
+	"$ROOT/setup" --programs --from "$DIST" --prefix "$T/p" >/dev/null
+	for f in bin/other share/applications/other.desktop share/icons/hicolor/scalable/apps/other.svg; do
+		mkdir -p "$(dirname "$T/p/$f")"; echo keep > "$T/p/$f"
+	done
+	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	for f in bin/other share/applications/other.desktop share/icons/hicolor/scalable/apps/other.svg; do
+		[ "$(cat "$T/p/$f")" = keep ]
+	done
+}
+
+@test "a second install over the first keeps the user's other files and is idempotent" {
+	mkdir -p "$T/p/bin"; echo keep > "$T/p/bin/something"
+	"$ROOT/setup" --programs --from "$DIST" --prefix "$T/p" >/dev/null
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$T/p/bin/something")" = keep ]
+	[ "$(readlink "$T/p/bin/protonup")" = steamdeck ]
+}
+
+@test "the firefox step touches only the chosen profile and keeps its other files" {
+	A=$T/ffa; B=$T/ffb; mkdir -p "$A" "$B"
+	printf 'user_pref("b.own", 2);\n' > "$B/user.js"; echo cookies > "$A/cookies.sqlite"
+	cp "$B/user.js" "$T/b.before"
+	FIREFOX_PROFILE="$A" "$ROOT/setup" --firefox >/dev/null
+	cmp "$B/user.js" "$T/b.before"
+	[ "$(cat "$A/cookies.sqlite")" = cookies ]
+}
+
+@test "the firefox step keeps a backup of the original user.js and never loses the user's lines" {
+	P=$T/ff; mkdir -p "$P"
+	printf '// my own\nuser_pref("my.own", 1);\n' > "$P/user.js"
+	cp "$P/user.js" "$T/orig"
+	FIREFOX_PROFILE="$P" "$ROOT/setup" --firefox >/dev/null
+	cmp "$P/user.js.steamdeck-bak" "$T/orig"
+	FIREFOX_PROFILE="$P" "$ROOT/setup" --firefox >/dev/null
+	cmp "$P/user.js.steamdeck-bak" "$T/orig"   # the backup is the original, not the second run
+	grep -q '^// my own$' "$P/user.js"
+	grep -q 'user_pref("my.own", 1);' "$P/user.js"
+}

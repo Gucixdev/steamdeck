@@ -46,12 +46,15 @@ teardown() { rm -rf "$T"; }
 @test "option 2 shows the state and option 3 removes what was installed" {
 	export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config STEAMDECK_NO_SYSTEMD=1
 	mkdir -p "$HOME/.local/bin"
-	: > "$HOME/.local/bin/protonup"; chmod +x "$HOME/.local/bin/protonup"
+	: > "$HOME/.local/bin/steamdeck"; chmod +x "$HOME/.local/bin/steamdeck"
+	ln -s steamdeck "$HOME/.local/bin/protonup"
 	run bash -c "printf '2\n' | '$ROOT/setup' --dry-run --root '$T/r'"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"installed  $HOME/.local/bin/protonup"* ]]
-	[[ "$output" == *"missing    $HOME/.local/bin/steamdeck"* ]]
+	[[ "$output" == *"installed  $HOME/.local/bin/steamdeck"* ]]
+	[[ "$output" == *"missing    $HOME/.local/bin/flatseal"* ]]
 	run bash -c "printf '3\ny\nn\n' | '$ROOT/setup' --root '$T/r'"
 	[ "$status" -eq 0 ]
 	[ ! -e "$HOME/.local/bin/protonup" ]
+	[ ! -e "$HOME/.local/bin/steamdeck" ]
 }

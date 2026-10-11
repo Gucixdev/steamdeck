@@ -392,9 +392,13 @@ pub fn set_launch_options_checked(
     if paths.is_empty() {
         return Err("no Steam account has logged in here yet (no localconfig.vdf)".into());
     }
+    // two phases: every file is parsed, changed and verified first, so a broken second account can
+    // not leave the first one changed and the second not
+    let mut staged: Vec<(PathBuf, String)> = Vec::new();
     for path in paths {
         let t = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut items = parse(&t).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut items =
+            parse(&t).map_err(|e| format!("{}: {e}; left untouched", path.display()))?;
         {
             let a = child_mut(&mut items, "UserLocalConfigStore");
             let a = child_mut(a, "Software");
@@ -412,6 +416,9 @@ pub fn set_launch_options_checked(
         if parse(&out).map(|x| x != items).unwrap_or(true) {
             return Err("internal check failed, nothing written".into());
         }
+        staged.push((path, out));
+    }
+    for (path, out) in staged {
         let _ = fs::copy(&path, path.with_extension("vdf.steamdeck-bak"));
         let tmp = path.with_extension("vdf.steamdeck-tmp");
         fs::write(&tmp, out).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -626,5 +633,143 @@ mod tests {
         )
         .unwrap();
         assert_eq!(internal_name(&d).as_deref(), Some("GE-Proton10-20"));
+    }
+    // ---- safety: config files are never corrupted, truncated or silently overwritten ------------
+
+    const LOCALCFG: &str = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"570\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"keep me %command%\"\n\t\t\t\t\t\t\"playtime\"\t\t\"42\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n";
+
+    #[test]
+    fn a_broken_config_is_left_exactly_as_it_was() {
+        let root = tmp("broken");
+        let p = config_path(&root);
+        let bad = "\"InstallConfigStore\"\n{\n\t\"Software\"\n\t{\n"; // never closed
+        fs::write(&p, bad).unwrap();
+        assert!(set_tool_checked(&root, 570, Some("x"), false).is_err());
+        assert_eq!(fs::read_to_string(&p).unwrap(), bad);
+        assert!(
+            !root.join("config/config.vdf.steamdeck-bak").exists(),
+            "no backup of a file we did not change"
+        );
+        assert!(!root.join("config/config.vdf.steamdeck-tmp").exists());
+    }
+
+    #[test]
+    fn a_missing_config_is_not_invented() {
+        let root = tmp("missing");
+        assert!(set_tool_checked(&root, 570, Some("x"), false).is_err());
+        assert!(!config_path(&root).exists());
+    }
+
+    #[test]
+    fn setting_one_game_changes_that_game_and_nothing_else() {
+        let root = tmp("onlyone");
+        let p = config_path(&root);
+        fs::write(&p, CONFIG).unwrap();
+        set_tool_checked(&root, 570, Some("GE-Proton10-20"), false).unwrap();
+        set_tool_checked(&root, 730, Some("other"), false).unwrap();
+        let before = parse(CONFIG).unwrap();
+        let after = parse(&fs::read_to_string(&p).unwrap()).unwrap();
+        // everything outside CompatToolMapping is identical
+        fn strip(items: &[(String, V)]) -> Vec<(String, V)> {
+            items
+                .iter()
+                .map(|(k, v)| match v {
+                    V::Obj(o) if k == "CompatToolMapping" => (k.clone(), V::Obj(vec![])),
+                    V::Obj(o) => (k.clone(), V::Obj(strip(o))),
+                    s => (k.clone(), s.clone()),
+                })
+                .collect()
+        }
+        assert_eq!(strip(&before), strip(&after));
+        // clearing 730 leaves 570 alone
+        set_tool_checked(&root, 730, None, false).unwrap();
+        let m = mapping(&root);
+        assert_eq!(m.get(&570).map(String::as_str), Some("GE-Proton10-20"));
+        assert!(!m.contains_key(&730));
+    }
+
+    #[test]
+    fn the_backup_is_the_previous_file_and_no_temporary_file_is_left() {
+        let root = tmp("backup");
+        let p = config_path(&root);
+        fs::write(&p, CONFIG).unwrap();
+        set_tool_checked(&root, 1, Some("a"), false).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("config/config.vdf.steamdeck-bak")).unwrap(),
+            CONFIG
+        );
+        let names: Vec<String> = fs::read_dir(root.join("config"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(names.iter().all(|n| !n.contains("tmp")), "{names:?}");
+    }
+
+    #[test]
+    fn launch_options_of_other_games_and_other_keys_survive() {
+        let root = tmp("lo-other");
+        let cfg = root.join("userdata/1/config");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("localconfig.vdf"), LOCALCFG).unwrap();
+        set_launch_options_checked(&root, 4800, Some("mangohud %command%"), false).unwrap();
+        let m = launch_options(&root);
+        assert_eq!(m.get(&570).map(String::as_str), Some("keep me %command%"));
+        assert_eq!(m.get(&4800).map(String::as_str), Some("mangohud %command%"));
+        assert!(fs::read_to_string(cfg.join("localconfig.vdf"))
+            .unwrap()
+            .contains("\"playtime\"\t\t\"42\""));
+        // changing 570 keeps its playtime
+        set_launch_options_checked(&root, 570, Some("gamemoderun %command%"), false).unwrap();
+        assert!(fs::read_to_string(cfg.join("localconfig.vdf"))
+            .unwrap()
+            .contains("\"playtime\"\t\t\"42\""));
+    }
+
+    #[test]
+    fn a_broken_second_account_leaves_the_first_one_unchanged() {
+        let root = tmp("lo-two");
+        let a = root.join("userdata/1/config");
+        let b = root.join("userdata/2/config");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("localconfig.vdf"), LOCALCFG).unwrap();
+        fs::write(b.join("localconfig.vdf"), "\"UserLocalConfigStore\" {").unwrap();
+        assert!(set_launch_options_checked(&root, 570, Some("x %command%"), false).is_err());
+        assert_eq!(
+            fs::read_to_string(a.join("localconfig.vdf")).unwrap(),
+            LOCALCFG
+        );
+        assert_eq!(
+            fs::read_to_string(b.join("localconfig.vdf")).unwrap(),
+            "\"UserLocalConfigStore\" {"
+        );
+    }
+
+    #[test]
+    fn strings_with_quotes_and_backslashes_round_trip() {
+        let root = tmp("lo-esc");
+        let cfg = root.join("userdata/1/config");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("localconfig.vdf"), LOCALCFG).unwrap();
+        let opts = "FOO=\"a b\" C:\\Games\\x %command% --name \"Zoë\"";
+        set_launch_options_checked(&root, 570, Some(opts), false).unwrap();
+        assert_eq!(
+            launch_options(&root).get(&570).map(String::as_str),
+            Some(opts)
+        );
+    }
+
+    #[test]
+    fn a_game_without_a_manifest_name_is_skipped_not_guessed() {
+        let root = tmp("acf-bad");
+        fs::create_dir_all(root.join("steamapps")).unwrap();
+        fs::write(
+            root.join("steamapps/appmanifest_9.acf"),
+            "\"AppState\" { \"appid\" \"9\" }",
+        )
+        .unwrap();
+        fs::write(root.join("steamapps/appmanifest_x.acf"), "not vdf {").unwrap();
+        assert!(games(&root).is_empty());
     }
 }

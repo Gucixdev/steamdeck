@@ -697,4 +697,175 @@ mod tests {
         assert!(!o.verified);
         assert!(o.path.join("compatibilitytool.vdf").is_file());
     }
+    // ---- safety: nothing outside what we manage is removed or overwritten ----------------------
+
+    fn lux_release(base: &str) -> Release {
+        Release {
+            tag_name: "v1".into(),
+            published_at: String::new(),
+            prerelease: false,
+            assets: vec![
+                Asset {
+                    name: "luxtorpeda-v1.tar.xz".into(),
+                    browser_download_url: format!("{base}/luxtorpeda-v1.tar.xz"),
+                    size: 0,
+                },
+                Asset {
+                    name: "luxtorpeda-v1.tar.xz.sha512".into(),
+                    browser_download_url: format!("{base}/luxtorpeda-v1.tar.xz.sha512"),
+                    size: 0,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn remove_refuses_odd_names_and_leaves_siblings_alone() {
+        let dir = tmp("rm-odd");
+        for n in ["a", "b"] {
+            fs::create_dir_all(dir.join(n)).unwrap();
+            fs::write(dir.join(n).join("compatibilitytool.vdf"), "x").unwrap();
+        }
+        fs::create_dir_all(dir.join(".hidden")).unwrap();
+        fs::write(dir.join(".hidden/compatibilitytool.vdf"), "x").unwrap();
+        for bad in [
+            "", ".", "..", "../a", "a/../b", "a/b", "/etc", ".hidden", "a\0b",
+        ] {
+            assert!(remove(&dir, bad).is_err(), "'{bad}' must be refused");
+        }
+        assert!(dir.join("a").is_dir() && dir.join("b").is_dir() && dir.join(".hidden").is_dir());
+        remove(&dir, "a").unwrap();
+        assert!(!dir.join("a").exists());
+        assert!(
+            dir.join("b/compatibilitytool.vdf").is_file(),
+            "the sibling survives"
+        );
+    }
+
+    #[test]
+    fn remove_only_removes_compatibility_tools() {
+        let dir = tmp("rm-notool");
+        fs::create_dir_all(dir.join("Documents")).unwrap();
+        fs::write(dir.join("Documents/precious.txt"), "keep").unwrap();
+        assert!(remove(&dir, "Documents").is_err());
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/precious.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn removing_a_symlinked_tool_does_not_delete_what_it_points_to() {
+        let dir = tmp("rm-link");
+        let outside = tmp("rm-link-out");
+        fs::write(outside.join("compatibilitytool.vdf"), "x").unwrap();
+        fs::write(outside.join("precious"), "keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        let _ = remove(&dir, "link");
+        assert_eq!(
+            fs::read_to_string(outside.join("precious")).unwrap(),
+            "keep"
+        );
+        assert!(outside.join("compatibilitytool.vdf").is_file());
+    }
+
+    #[test]
+    fn a_failed_replace_keeps_the_previous_fixed_directory() {
+        let src = find("luxtorpeda").unwrap();
+        let garbage = b"this is not an archive at all".to_vec();
+        let sums = format!("{}  luxtorpeda-v1.tar.xz\n", sha512_hex(&garbage));
+        let base = serve(vec![
+            ("/luxtorpeda-v1.tar.xz".into(), garbage),
+            ("/luxtorpeda-v1.tar.xz.sha512".into(), sums.into_bytes()),
+        ]);
+        let dir = tmp("keep-old");
+        fs::create_dir_all(dir.join("luxtorpeda")).unwrap();
+        fs::write(dir.join("luxtorpeda/my-settings"), "mine").unwrap();
+        let e = install(src, &lux_release(&base), &dir, &mut |_| {}).unwrap_err();
+        assert!(
+            e.contains("extract") || e.contains("compatibilitytool"),
+            "{e}"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("luxtorpeda/my-settings")).unwrap(),
+            "mine"
+        );
+        let left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            left,
+            ["luxtorpeda"],
+            "no temp or part files remain: {left:?}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_checksum_never_touches_an_existing_install_or_its_neighbours() {
+        let dir = tmp("keep-nb");
+        fs::create_dir_all(dir.join("other-tool")).unwrap();
+        fs::write(dir.join("other-tool/compatibilitytool.vdf"), "x").unwrap();
+        let tag = "GE-Proton10-4";
+        let data = make_archive(tag, true);
+        let sums = format!("{}  {tag}.tar.gz\n", "f".repeat(128));
+        let base = serve(vec![
+            (format!("/{tag}.tar.gz"), data),
+            (format!("/{tag}.sha512sum"), sums.into_bytes()),
+        ]);
+        assert!(install(ge(), &release(&base, tag), &dir, &mut |_| {}).is_err());
+        assert!(dir.join("other-tool/compatibilitytool.vdf").is_file());
+        assert!(!dir.join(tag).exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn an_archive_with_a_parent_path_cannot_write_outside_the_directory() {
+        let parent = tmp("trav");
+        let dir = parent.join("tools");
+        fs::create_dir_all(&dir).unwrap();
+        // a tar entry named ../evil.txt, written by hand because the builder refuses such a path
+        let enc = GzEncoder::new(Vec::new(), Compression::fast());
+        let mut b = tar::Builder::new(enc);
+        let mut h = tar::Header::new_gnu();
+        h.set_size(4);
+        h.set_mode(0o644);
+        let name = b"../evil.txt";
+        h.as_old_mut().name[..name.len()].copy_from_slice(name);
+        h.set_cksum();
+        b.append(&h, &b"evil"[..]).unwrap();
+        let data = b.into_inner().unwrap().finish().unwrap();
+        let tag = "GE-Proton10-3";
+        let sums = format!("{}  {tag}.tar.gz\n", sha512_hex(&data));
+        let base = serve(vec![
+            (format!("/{tag}.tar.gz"), data),
+            (format!("/{tag}.sha512sum"), sums.into_bytes()),
+        ]);
+        let r = install(ge(), &release(&base, tag), &dir, &mut |_| {});
+        assert!(
+            r.is_err(),
+            "an archive without a compatibility tool is refused"
+        );
+        assert!(
+            !parent.join("evil.txt").exists(),
+            "nothing was written next to the tools directory"
+        );
+        assert!(!dir.join("evil.txt").exists());
+    }
+
+    #[test]
+    fn a_name_in_the_release_cannot_escape_the_directory() {
+        let dir = tmp("esc");
+        for bad in ["../x", "a/b", "..", ".hidden"] {
+            let rel = Release {
+                tag_name: bad.into(),
+                published_at: String::new(),
+                prerelease: false,
+                assets: vec![],
+            };
+            assert!(install(ge(), &rel, &dir, &mut |_| {}).is_err());
+        }
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+    }
 }

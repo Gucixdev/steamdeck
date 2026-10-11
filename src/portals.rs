@@ -91,10 +91,7 @@ pub fn document_path(data: &str) -> Option<String> {
 }
 
 fn valid(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() < 256
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+    crate::flatpak::valid_id(s)
 }
 
 pub fn grants(app: &str) -> Vec<Grant> {
