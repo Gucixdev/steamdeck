@@ -1,8 +1,8 @@
 //! The one program: Home, ProtonUp, Flatseal and Settings (System + Log) as four tabs of one window.
 //! Each tab has the same layout (`ui::shell`: a sidebar and a main area); this file only switches.
 use crate::ui::{
-    accent_button, card, nav_item, page_title, quiet_button, shell, theme, warning_card, ACCENT,
-    PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
+    accent_button, card_busy, nav_item, page_title, quiet_button, shell, theme, warning_card,
+    ACCENT, PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
 use crate::{flatapps, health, log, proton_gui, seal_gui, steaminstalls, storage_gui, system};
 use iced::widget::{button, column, container, scrollable, text};
@@ -159,15 +159,11 @@ impl App {
                     .map(Msg::Proton),
                 self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
             ]),
-            Msg::UpdateProtons => {
-                self.section = Section::Get;
-                let _ = self
-                    .proton
-                    .update(proton_gui::Msg::Tab(proton_gui::Tab::Available));
-                self.proton
-                    .update(proton_gui::Msg::UpdateAll)
-                    .map(Msg::Proton)
-            }
+            // stays on Home: the button itself shows that it is working
+            Msg::UpdateProtons => self
+                .proton
+                .update(proton_gui::Msg::UpdateAll)
+                .map(Msg::Proton),
             Msg::Proton(m) => self.proton.update(m).map(Msg::Proton),
             Msg::Seal(m) => self.seal.update(m).map(Msg::Seal),
             Msg::System(m) => self.system.update(m).map(Msg::System),
@@ -300,26 +296,32 @@ impl App {
                 } else {
                     column![].into()
                 },
-                card(
+                card_busy(
                     "Update Protons",
                     "Installs the newest version of every Proton you have and removes the older ones. Games on an old one are moved to the new one.",
                     "Update",
+                    self.proton.is_busy(),
+                    self.tick,
                     Msg::UpdateProtons
                 ),
-                card(
+                card_busy(
                     "Update Flatpak apps",
                     "flatpak update for every installed app and runtime.",
                     "Update",
+                    self.apps.is_updating(),
+                    self.tick,
                     Msg::UpdateFlatpaks
                 ),
-                card(
+                card_busy(
                     "Update everything",
                     "Both of the above.",
                     "Update all",
+                    self.proton.is_busy() || self.apps.is_updating(),
+                    self.tick,
                     Msg::UpdateEverything
                 ),
-                self.proton.status_view(self.tick).map(Msg::Proton),
-                self.apps.status_view::<Msg>(self.tick),
+                self.proton.report_view().map(Msg::Proton),
+                self.apps.report_view::<Msg>(),
             ]
             .spacing(SPACING)
             .into(),

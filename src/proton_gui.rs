@@ -642,6 +642,20 @@ impl App {
         !self.busy.is_empty() || !self.queue.is_empty() || self.checking > 0
     }
 
+    /// Only the outcome (what was installed and removed, errors), no progress; for Home.
+    pub fn report_view(&self) -> Element<'_, Msg> {
+        let mut c = Column::new().spacing(4);
+        if !self.is_busy() {
+            for l in self.report.iter().rev().take(12).rev() {
+                c = c.push(text(l.clone()).size(SMALL_SIZE).color(GREEN));
+            }
+            if let Some(e) = &self.error {
+                c = c.push(text(e.clone()).size(SMALL_SIZE).color(RED));
+            }
+        }
+        c.into()
+    }
+
     pub fn status_view(&self, tick: usize) -> Element<'_, Msg> {
         let spin = crate::ui::spinner(tick);
         let mut status = Column::new().spacing(6);

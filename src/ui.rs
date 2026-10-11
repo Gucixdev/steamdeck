@@ -237,6 +237,56 @@ pub fn table_row<'a, M: 'a>(cells: Vec<(Element<'a, M>, u16)>, shaded: bool) -> 
         .into()
 }
 
+/// A home tile whose button turns into a spinner while the job runs (nothing to click then).
+pub fn card_busy<'a, M: Clone + 'a>(
+    title: &str,
+    about: &str,
+    action: &'static str,
+    busy: bool,
+    tick: usize,
+    msg: M,
+) -> Element<'a, M> {
+    let right: Element<'a, M> = if busy {
+        container(
+            text(format!("{}  Working", spinner(tick)))
+                .size(TEXT_SIZE)
+                .color(ACCENT),
+        )
+        .padding([10, 20])
+        .into()
+    } else {
+        btn(text(action).size(TEXT_SIZE))
+            .padding([10, 20])
+            .on_press(msg)
+            .style(primary_button())
+            .into()
+    };
+    container(
+        row![
+            column![
+                text(title.to_string()).size(TEXT_SIZE),
+                text(about.to_string()).size(SMALL_SIZE).color(DIM)
+            ]
+            .spacing(4)
+            .width(Fill),
+            right,
+        ]
+        .spacing(SPACING)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(PAD)
+    .width(Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(color!(0x2a475e))),
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// A warning tile (yellow) for something the user should not miss.
 pub fn warning_card<'a, M: Clone + 'a>(
     title: &str,

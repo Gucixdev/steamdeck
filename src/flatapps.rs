@@ -190,6 +190,16 @@ impl State {
         self.started.is_some()
     }
 
+    /// The last result only, for Home (nothing while an update runs: the button spins instead).
+    pub fn report_view<'a, M: 'a>(&'a self) -> Element<'a, M> {
+        let t = if self.started.is_some() {
+            String::new()
+        } else {
+            self.output.clone()
+        };
+        text(t).size(SMALL_SIZE).into()
+    }
+
     /// The last result, for Home; while an update runs, a spinner and the time it has taken.
     pub fn status_view<'a, M: 'a>(&'a self, tick: usize) -> Element<'a, M> {
         let t = match self.started {
