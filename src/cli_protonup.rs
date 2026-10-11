@@ -45,6 +45,15 @@ fn home() -> PathBuf {
 }
 
 fn take_opt(args: &mut Vec<String>, name: &str) -> Result<Option<String>, String> {
+    // --name=value is the same as --name value
+    let eq = format!("{name}=");
+    if let Some(i) = args.iter().position(|a| a.starts_with(&eq)) {
+        let v = args.remove(i)[eq.len()..].to_string();
+        if v.is_empty() {
+            return Err(format!("{name} needs a value"));
+        }
+        return Ok(Some(v));
+    }
     if let Some(i) = args.iter().position(|a| a == name) {
         if i + 1 >= args.len() {
             return Err(format!("{name} needs a value"));
@@ -257,11 +266,13 @@ pub fn run(mut args: Vec<String>) -> ExitCode {
             let n = if all {
                 usize::MAX
             } else {
-                args.iter()
-                    .position(|a| a == "-n")
-                    .and_then(|i| args.get(i + 1))
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(15)
+                match args.iter().position(|a| a == "-n") {
+                    None => 15,
+                    Some(i) => match args.get(i + 1).and_then(|v| v.parse::<usize>().ok()) {
+                        Some(n) if n >= 1 => n,
+                        _ => return fail("-n needs a number of at least 1"),
+                    },
+                }
             };
             match github::releases(src, n) {
                 Ok(rs) => {

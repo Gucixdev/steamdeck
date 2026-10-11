@@ -18,7 +18,20 @@ fn main() -> ExitCode {
                 println!("steamdeck: ProtonUp, Flatseal and system setup in one window\n\n  steamdeck [storage|steam|apps|health|settings|log]   open the window (on that page)\n  steamdeck protonup ...     the ProtonUp command line (try: steamdeck protonup --help)\n  steamdeck flatseal ...     the Flatseal command line\n\nLog: {}", steamdeck::log::path().display());
                 return ExitCode::SUCCESS;
             }
+            Some("--version") | Some("-V") => {
+                println!("steamdeck {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
             other => {
+                const PAGES: [&str; 8] = [
+                    "home", "steam", "apps", "scripts", "storage", "health", "system", "log",
+                ];
+                if let Some(o) = other {
+                    if o != "settings" && !PAGES.contains(&o) {
+                        eprintln!("steamdeck: unknown command '{o}' (try --help)");
+                        return ExitCode::from(2);
+                    }
+                }
                 let section = match other {
                     Some("steam") => steamdeck::launcher::Section::Steam,
                     Some("apps") => steamdeck::launcher::Section::Apps,

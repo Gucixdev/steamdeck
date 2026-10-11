@@ -108,4 +108,36 @@ mod tests {
         let want = h.join("somewhere/tools");
         assert_eq!(default_tool_dir(&h, Some(&want)), want);
     }
+
+    #[test]
+    fn a_leftover_flatpak_folder_is_ignored_when_a_real_steam_exists() {
+        let h = tmp("leftover");
+        std::fs::create_dir_all(h.join(".local/share/Steam/steamapps")).unwrap();
+        std::fs::create_dir_all(h.join(".var/app/com.valvesoftware.Steam/data/Steam")).unwrap();
+        let d = tool_dirs(&h);
+        assert_eq!(d, [h.join(".local/share/Steam/compatibilitytools.d")]);
+    }
+
+    #[test]
+    fn both_installs_are_listed_when_both_are_real() {
+        let h = tmp("both");
+        std::fs::create_dir_all(h.join(".local/share/Steam/steamapps")).unwrap();
+        std::fs::create_dir_all(h.join(".var/app/com.valvesoftware.Steam/data/Steam/config"))
+            .unwrap();
+        std::fs::write(
+            h.join(".var/app/com.valvesoftware.Steam/data/Steam/config/config.vdf"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(tool_dirs(&h).len(), 2);
+        assert!(default_tool_dir(&h, None).starts_with(h.join(".local/share/Steam")));
+    }
+
+    #[test]
+    fn a_dangling_symlink_is_not_a_steam_root() {
+        let h = tmp("dangling");
+        std::fs::create_dir_all(h.join(".steam")).unwrap();
+        std::os::unix::fs::symlink(h.join("nowhere"), h.join(".steam/root")).unwrap();
+        assert!(steam_roots(&h).is_empty());
+    }
 }

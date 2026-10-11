@@ -89,6 +89,17 @@ pub const SECTIONS: &[Section] = &[
     },
 ];
 
+/// A permission or path name that is safe to put in a `;`-separated list: not empty, no `;` (it would
+/// become two entries), no control characters, no leading `!` (that is how a denial is written) and no
+/// padding spaces.
+pub fn valid_name(s: &str) -> bool {
+    !s.is_empty()
+        && !s.contains(';')
+        && !s.starts_with('!')
+        && s == s.trim()
+        && !s.chars().any(char::is_control)
+}
+
 /// Names a filesystem entry is toggled under: the path without its `:ro` / `:rw` / `:create` mode.
 fn fs_path(entry: &str) -> &str {
     entry
@@ -205,6 +216,9 @@ impl Layers {
     /// explicit states are always written, even when they equal what is inherited, so a later
     /// change below does not silently flip them.
     pub fn set_state(&mut self, key: &str, name: &str, st: Tri) {
+        if !valid_name(name) {
+            return;
+        }
         let mut own = self.app.list(CONTEXT, key);
         own.retain(|t| {
             let n = t.strip_prefix('!').unwrap_or(t);
@@ -254,16 +268,18 @@ impl Layers {
             .collect()
     }
 
-    pub fn add_filesystem(&mut self, entry: &str) {
+    /// False (and nothing changes) when `entry` is not a usable path, e.g. two paths pasted with `;`.
+    pub fn add_filesystem(&mut self, entry: &str) -> bool {
         let entry = entry.trim();
-        if entry.is_empty() {
-            return;
+        if !valid_name(entry) {
+            return false;
         }
         let mut own = self.app.list(CONTEXT, "filesystems");
         let p = fs_path(entry).to_string();
         own.retain(|t| fs_path(t.strip_prefix('!').unwrap_or(t)) != p);
         own.push(entry.to_string());
         self.app.set_list(CONTEXT, "filesystems", &own);
+        true
     }
 
     /// Remove a custom path: drop our own entry, or revoke it when it comes from a lower layer.
@@ -456,5 +472,74 @@ mod tests {
         assert_eq!(l.env().len(), 1);
         l.reset();
         assert!(l.app.is_empty());
+    }
+
+    #[test]
+    fn names_that_would_corrupt_the_list_are_refused() {
+        for bad in ["", " ", "a;b", "!network", " x11", "x11 ", "a\nb"] {
+            assert!(!valid_name(bad), "{bad:?}");
+            let mut l = Layers::default();
+            l.set("sockets", bad, true);
+            assert!(l.app.is_empty(), "{bad:?} wrote {}", l.app.to_text());
+            if bad.trim() == bad {
+                // a pasted path is trimmed on purpose, so only unpadded ones must be refused
+                let mut l = Layers::default();
+                assert!(!l.add_filesystem(bad), "{bad:?}");
+                assert!(l.app.is_empty());
+            }
+        }
+        assert!(valid_name("~/My Games:rw"));
+        assert!(valid_name("xdg-run/pipewire-0"));
+    }
+
+    #[test]
+    fn two_pasted_paths_are_refused_not_split() {
+        let mut l = Layers::default();
+        assert!(!l.add_filesystem("/mnt/a;/mnt/b"));
+        assert!(l.custom_filesystems().is_empty());
+    }
+
+    #[test]
+    fn a_path_with_a_colon_that_is_not_a_mode_keeps_it() {
+        let mut l = Layers::default();
+        assert!(l.add_filesystem("/mnt/a:b"));
+        assert!(l.is_on("filesystems", "/mnt/a:b"));
+        l.remove_filesystem("/mnt/a:b");
+        assert!(l.app.is_empty());
+    }
+
+    #[test]
+    fn a_later_mode_replaces_the_earlier_one() {
+        let mut l = Layers::default();
+        l.add_filesystem("/mnt/a:ro");
+        l.add_filesystem("/mnt/a:rw");
+        assert_eq!(l.app.list(CONTEXT, "filesystems"), ["/mnt/a:rw"]);
+    }
+
+    #[test]
+    fn a_denied_filesystem_is_not_listed_as_custom_and_comes_back_on_default() {
+        let mut l = Layers {
+            meta: KeyFile::parse("[Context]\nfilesystems=/mnt/a:ro;\n"),
+            ..Default::default()
+        };
+        l.set("filesystems", "/mnt/a", false);
+        assert!(l.custom_filesystems().is_empty());
+        l.set_state("filesystems", "/mnt/a", Tri::Default);
+        assert_eq!(l.custom_filesystems().len(), 1);
+    }
+
+    #[test]
+    fn global_overrides_apply_to_every_app_and_the_app_can_undo_them() {
+        let g = KeyFile::parse("[Context]\nshared=!network;\n[Environment]\nA=global\n");
+        let mut l = Layers {
+            global: g,
+            ..Default::default()
+        };
+        assert!(!l.is_on("shared", "network"));
+        l.set("shared", "network", true);
+        assert!(l.is_on("shared", "network"));
+        l.set_env("A", "app");
+        assert_eq!(l.env()[0].value, "app");
+        assert!(l.env()[0].overridden);
     }
 }

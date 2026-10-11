@@ -913,4 +913,27 @@ mod tests {
         assert!(o.verified);
         assert!(dir.join("proton-EM-10.0-1/compatibilitytool.vdf").is_file());
     }
+
+    #[test]
+    fn version_numbers_beyond_u64_and_odd_names_do_not_panic_and_still_sort() {
+        assert_eq!(version_key(""), Vec::<u64>::new());
+        assert_eq!(version_key("no-digits"), Vec::<u64>::new());
+        let huge = format!("x{}", "9".repeat(60));
+        let _ = version_key(&huge);
+        assert!(version_key("proton-em-10.0-5") < version_key("proton-em-10.0-12"));
+        assert!(version_key("GE-Proton9-27") < version_key("GE-Proton10-1"));
+        assert!(version_key("GE-Proton10") < version_key("GE-Proton10-1"));
+    }
+
+    #[test]
+    fn list_installed_ignores_files_and_folders_without_a_tool_file() {
+        let d = tmp("list-odd");
+        std::fs::create_dir_all(d.join("not-a-tool")).unwrap();
+        std::fs::write(d.join("stray-file"), "x").unwrap();
+        std::fs::create_dir_all(d.join("GE-Proton10-1")).unwrap();
+        std::fs::write(d.join("GE-Proton10-1/compatibilitytool.vdf"), "").unwrap();
+        let names: Vec<String> = list_installed(&d).into_iter().map(|i| i.name).collect();
+        assert_eq!(names, ["GE-Proton10-1"]);
+        assert!(list_installed(&d.join("missing")).is_empty());
+    }
 }

@@ -73,6 +73,9 @@ pub fn run(args: Vec<String>) -> ExitCode {
             let Some(id) = a(1) else {
                 return fail("show needs an app id");
             };
+            if !flatpak::valid_id(id) {
+                return fail(format!("not an application id: '{id}'"));
+            }
             let l = flatpak::load_layers(id);
             for s in SECTIONS {
                 say!("[{}]", s.title);
@@ -163,6 +166,9 @@ pub fn run(args: Vec<String>) -> ExitCode {
             let Some(id) = a(1) else {
                 return fail("portals needs an app id");
             };
+            if !flatpak::valid_id(id) {
+                return fail(format!("not an application id: '{id}'"));
+            }
             let g = crate::portals::grants(id);
             for p in crate::portals::PORTALS {
                 let v = match crate::portals::answer(&g, p) {
@@ -218,6 +224,14 @@ pub fn run(args: Vec<String>) -> ExitCode {
             let (Some(id), Some(key), Some(name)) = (a(1), a(2), a(3)) else {
                 return fail(format!("{cmd} needs APP KEY NAME"));
             };
+            if !flatpak::valid_id(id) {
+                return fail(format!("not an application id: '{id}'"));
+            }
+            if !perms::valid_name(name) {
+                return fail(format!(
+                    "'{name}' is not a permission name (no ';', no leading '!', no spaces around it)"
+                ));
+            }
             if !SECTIONS.iter().any(|s| s.key == key) {
                 return fail(format!(
                     "unknown key '{key}' (shared, sockets, devices, features, filesystems)"
@@ -264,6 +278,14 @@ pub fn run(args: Vec<String>) -> ExitCode {
             let (Some(id), Some(path)) = (a(1), a(2)) else {
                 return fail(format!("{cmd} needs APP PATH"));
             };
+            if !flatpak::valid_id(id) {
+                return fail(format!("not an application id: '{id}'"));
+            }
+            if !perms::valid_name(path) {
+                return fail(format!(
+                    "'{path}' is not a usable path (one path per call, no ';', no leading '!')"
+                ));
+            }
             let mut l = flatpak::load_layers(id);
             if cmd == "fs-add" {
                 l.add_filesystem(path);

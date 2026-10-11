@@ -86,8 +86,18 @@ pub fn parse_show(out: &str) -> Vec<Grant> {
 
 /// The path out of a documents entry's data, `(b'/home/me/file.png', 56, ...)`.
 pub fn document_path(data: &str) -> Option<String> {
+    // GVariant prints a byte string as b'...' with \' and \\ escaped inside
     let rest = data.strip_prefix("(b'")?;
-    Some(rest[..rest.find('\'')?].to_string())
+    let mut out = String::new();
+    let mut it = rest.chars();
+    while let Some(c) = it.next() {
+        match c {
+            '\\' => out.push(it.next()?),
+            '\'' => return Some(out),
+            c => out.push(c),
+        }
+    }
+    None
 }
 
 fn valid(s: &str) -> bool {
@@ -178,5 +188,31 @@ mod tests {
     fn names_with_odd_characters_are_refused() {
         assert!(revoke("org.a.B", "documents", "x;rm").is_err());
         assert!(set("../x", &PORTALS[0], Answer::Yes).is_err());
+    }
+
+    #[test]
+    fn a_file_name_with_an_apostrophe_or_backslash_is_read_whole() {
+        assert_eq!(
+            document_path(r"(b'/home/me/Bob\'s file.png', 56)").as_deref(),
+            Some("/home/me/Bob's file.png")
+        );
+        assert_eq!(
+            document_path(r"(b'/home/me/a\\b.png', 56)").as_deref(),
+            Some(r"/home/me/a\b.png")
+        );
+        assert_eq!(document_path("(b'/unterminated"), None);
+        assert_eq!(document_path("garbage"), None);
+    }
+
+    #[test]
+    fn short_or_empty_store_lines_are_skipped_and_unknown_answers_are_default() {
+        let g = parse_show("\n\nonly\ttwo\ndevices\tcamera\torg.a.B\task\t\n");
+        assert_eq!(g.len(), 1);
+        assert_eq!(
+            answer(&g, &PORTALS[2]),
+            Answer::Default,
+            "'ask' is neither yes nor no"
+        );
+        assert!(parse_show("").is_empty());
     }
 }
