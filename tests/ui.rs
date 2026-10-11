@@ -511,7 +511,7 @@ fn big_pages_draw_fast_enough_not_to_stutter() {
         )
         .unwrap();
     }
-    let mut time = |win: &mut Window| {
+    let time = |win: &mut Window| {
         let t = std::time::Instant::now();
         for _ in 0..3 {
             let sim = tall(win.app.view());
