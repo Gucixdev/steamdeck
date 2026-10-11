@@ -5,6 +5,7 @@
 
 pub mod launcher;
 pub mod log;
+pub mod steaminstalls;
 pub mod system;
 pub mod ui;
 pub mod cli_flatseal;

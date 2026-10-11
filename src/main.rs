@@ -15,11 +15,17 @@ fn main() -> ExitCode {
         _ => match args.first().map(String::as_str) {
             Some("protonup") | Some("flatseal") => (args[0].clone(), args[1..].to_vec()),
             Some("--help") | Some("-h") | Some("help") => {
-                println!("steamdeck: ProtonUp, Flatseal and system setup in one window\n\n  steamdeck                  open the window\n  steamdeck protonup ...     the ProtonUp command line (try: steamdeck protonup --help)\n  steamdeck flatseal ...     the Flatseal command line\n\nLog: {}", steamdeck::log::path().display());
+                println!("steamdeck: ProtonUp, Flatseal and system setup in one window\n\n  steamdeck [steam|settings|log]   open the window (on that page)\n  steamdeck protonup ...     the ProtonUp command line (try: steamdeck protonup --help)\n  steamdeck flatseal ...     the Flatseal command line\n\nLog: {}", steamdeck::log::path().display());
                 return ExitCode::SUCCESS;
             }
-            _ => {
-                return match steamdeck::launcher::run(steamdeck::launcher::Start::default()) {
+            other => {
+                let section = match other {
+                    Some("steam") => steamdeck::launcher::Section::Steam,
+                    Some("system") | Some("settings") => steamdeck::launcher::Section::System,
+                    Some("log") => steamdeck::launcher::Section::Log,
+                    _ => steamdeck::launcher::Section::Home,
+                };
+                return match steamdeck::launcher::run(steamdeck::launcher::Start { section, ..Default::default() }) {
                     Ok(()) => ExitCode::SUCCESS,
                     Err(e) => {
                         steamdeck::log::write("launcher", &format!("window failed: {e}"));
