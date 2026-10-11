@@ -5,10 +5,10 @@ use crate::github::Release;
 use crate::install::{self, Installed, Progress};
 use crate::sources::{self, Source, SOURCES};
 use crate::ui::{
-    accent_button, danger_button, human_bytes, quiet_button, AMBER, DIM, GREEN, PAD, ACCENT,
+    danger_button, human_bytes, quiet_button, AMBER, DIM, GREEN, PAD, ACCENT,
     RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use crate::ui::{heading, item, nav_item, shell};
+use crate::ui::{heading, item, nav_item, primary_button};
 use crate::{github, steam};
 use iced::widget::{
     button, column, pick_list, progress_bar, row, scrollable, space, text, text_input, Column,
@@ -47,6 +47,7 @@ pub enum Msg {
     CancelRemove,
     Remove(PathBuf, String),
     UseDir(PathBuf),
+    UseLabel(String),
 }
 
 /// One Steam install on this machine: where it is, what is installed in it, its games.
@@ -281,6 +282,11 @@ impl App {
                     Err(e) => self.error = Some(e),
                 }
             }
+            Msg::UseLabel(l) => {
+                if let Some(d) = self.dirs.iter().find(|d| root_label(d.parent().unwrap_or(d)) == l).cloned() {
+                    return self.update(Msg::UseDir(d));
+                }
+            }
             Msg::UseDir(d) => {
                 self.dir = d;
                 return self.reload();
@@ -367,51 +373,18 @@ impl App {
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Msg> {
-        let side = column![
-            nav_item(
-                "Installed",
-                self.tab == Tab::Installed,
-                Msg::Tab(Tab::Installed)
-            ),
-            nav_item(
-                "Available",
-                self.tab == Tab::Available,
-                Msg::Tab(Tab::Available)
-            ),
-            nav_item("Games", self.tab == Tab::Games, Msg::Tab(Tab::Games)),
-            space::vertical(),
-            nav_item("Refresh", false, Msg::Refresh),
+    /// The navigation entries of this section, for the launcher's single sidebar.
+    pub fn side(&self, active: bool) -> Element<'_, Msg> {
+        column![
+            nav_item("Installed", active && self.tab == Tab::Installed, Msg::Tab(Tab::Installed)),
+            nav_item("Available", active && self.tab == Tab::Available, Msg::Tab(Tab::Available)),
+            nav_item("Games", active && self.tab == Tab::Games, Msg::Tab(Tab::Games)),
         ]
         .spacing(8)
-        .height(Fill);
+        .into()
+    }
 
-        let dir_line: Element<Msg> = if self.dirs.len() > 1 {
-            let mut r = row![text("Install into").size(SMALL_SIZE).color(DIM)]
-                .spacing(SPACING)
-                .align_y(iced::Alignment::Center);
-            for d in &self.dirs {
-                let label = d
-                    .parent()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                let b = button(text(label).size(SMALL_SIZE))
-                    .padding(8)
-                    .on_press(Msg::UseDir(d.clone()));
-                r = r.push(if *d == self.dir {
-                    b.style(accent_button())
-                } else {
-                    b.style(quiet_button())
-                });
-            }
-            r.into()
-        } else {
-            text(self.dir.display().to_string())
-                .size(SMALL_SIZE)
-                .color(DIM)
-                .into()
-        };
-
+    pub fn main(&self) -> Element<'_, Msg> {
         let mut status = Column::new().spacing(6);
         for b in &self.busy {
             let pct = if b.total > 0 {
@@ -454,21 +427,24 @@ impl App {
             Tab::Available => self.available_view(),
             Tab::Games => self.games_view(),
         };
-        let mut top = column![dir_line, status].spacing(SPACING);
+        let mut top = column![status].spacing(SPACING);
         if self.tab == Tab::Available {
             let names: Vec<&'static str> = SOURCES.iter().map(|s| s.name).collect();
-            top = top.push(
-                row![
-                    text("Category").size(SMALL_SIZE).color(DIM),
-                    pick_list(names, Some(self.source.name), Msg::SourceName)
-                        .text_size(SMALL_SIZE)
-                        .padding(10),
-                ]
-                .spacing(SPACING)
-                .align_y(iced::Alignment::Center),
-            );
+            let mut r = row![
+                text("Category").size(SMALL_SIZE).color(DIM),
+                pick_list(names, Some(self.source.name), Msg::SourceName).text_size(SMALL_SIZE).padding(10),
+            ]
+            .spacing(SPACING)
+            .align_y(iced::Alignment::Center);
+            if self.dirs.len() > 1 {
+                let labels: Vec<String> = self.dirs.iter().map(|d| root_label(d.parent().unwrap_or(d))).collect();
+                let cur = root_label(self.dir.parent().unwrap_or(&self.dir));
+                r = r.push(text("Install into").size(SMALL_SIZE).color(DIM));
+                r = r.push(pick_list(labels, Some(cur), Msg::UseLabel).text_size(SMALL_SIZE).padding(10));
+            }
+            top = top.push(r);
         }
-        shell(side.into(), column![top, body].spacing(SPACING).into())
+        column![top, body].spacing(SPACING).into()
     }
 
     /// Every Steam install on one list: what is where, with its games below it.
@@ -677,7 +653,7 @@ impl App {
                 button(text("Install").size(TEXT_SIZE))
                     .padding(PAD)
                     .on_press(Msg::Install(r.tag_name.clone()))
-                    .style(accent_button())
+                    .style(primary_button())
                     .into()
             };
             col = col.push(

@@ -9,19 +9,19 @@ pub const TITLE_SIZE: f32 = 28.0;
 pub const SPACING: f32 = 12.0;
 pub const PAD: f32 = 14.0;
 
-pub const GREEN: iced::Color = color!(0x5ba32b);
-/// Steam blue (the focus colour of the Steam client and Gaming Mode)
-pub const ACCENT: iced::Color = color!(0x1a9fff);
-pub const RED: iced::Color = color!(0xd94126);
+pub const GREEN: iced::Color = color!(0x75b022);
+/// Steam light blue (headings, selection)
+pub const ACCENT: iced::Color = color!(0x66c0f4);
+pub const RED: iced::Color = color!(0xc94545);
 pub const AMBER: iced::Color = color!(0xe5a823);
-pub const DIM: iced::Color = color!(0x8b929a);
+pub const DIM: iced::Color = color!(0x8f98a0);
 
 pub fn theme() -> Theme {
     Theme::custom(
         "Deck".to_string(),
         Palette {
-            background: color!(0x171d25),
-            text: color!(0xdcdedf),
+            background: color!(0x1b2838),
+            text: color!(0xc7d5e0),
             primary: ACCENT,
             success: GREEN,
             warning: AMBER,
@@ -86,19 +86,23 @@ pub fn solid(bg: iced::Color) -> impl Fn(&IcedTheme, button::Status) -> button::
 }
 
 pub fn accent_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0x1a73c8))
+    solid(color!(0x417a9b))
+}
+/// The Steam green of "Install" and "Play".
+pub fn primary_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
+    solid(color!(0x5c7e10))
 }
 pub fn quiet_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0x2a3441))
+    solid(color!(0x2a475e))
 }
 pub fn danger_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0xb03a2a))
+    solid(color!(0xa33e29))
 }
 
 use iced::widget::{button as btn, column, container, row, text};
 use iced::{Element, Fill, Length};
 
-pub const SIDEBAR_W: f32 = 200.0;
+pub const SIDEBAR_W: f32 = 230.0;
 
 /// Sidebar plus main area, padded the same way in every window.
 pub fn shell<'a, M: 'a>(side: Element<'a, M>, main: Element<'a, M>) -> Element<'a, M> {

@@ -1,8 +1,8 @@
 //! The one program: ProtonUp, Flatseal, System and Log as sections of a single window. Each section
 //! keeps its own sidebar layout (`ui::shell`); this file only switches between them.
-use crate::ui::{accent_button, quiet_button, theme, ACCENT, PAD, SMALL_SIZE, SPACING, TEXT_SIZE};
+use crate::ui::{heading, nav_item, quiet_button, shell, theme, SMALL_SIZE, SPACING};
 use crate::{log, proton_gui, seal_gui, system};
-use iced::widget::{button, column, container, row, scrollable, space, text};
+use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
 
@@ -72,8 +72,18 @@ impl App {
                 self.section = s;
                 Task::none()
             }
-            Msg::Proton(m) => self.proton.update(m).map(Msg::Proton),
-            Msg::Seal(m) => self.seal.update(m).map(Msg::Seal),
+            Msg::Proton(m) => {
+                if matches!(m, proton_gui::Msg::Tab(_)) {
+                    self.section = Section::Proton;
+                }
+                self.proton.update(m).map(Msg::Proton)
+            }
+            Msg::Seal(m) => {
+                if matches!(m, seal_gui::Msg::Select(_)) {
+                    self.section = Section::Seal;
+                }
+                self.seal.update(m).map(Msg::Seal)
+            }
             Msg::System(m) => self.system.update(m).map(Msg::System),
             Msg::RefreshLog => Task::none(),
         };
@@ -90,39 +100,31 @@ impl App {
         t
     }
 
+    /// One sidebar for everything: ProtonUp's pages, Flatseal's apps, System and Log.
     fn view(&self) -> Element<'_, Msg> {
-        let tab = |label: &'static str, s: Section| {
-            let b = button(text(label).size(TEXT_SIZE)).padding([8, 16]).on_press(Msg::Section(s));
-            if self.section == s { b.style(accent_button()) } else { b.style(quiet_button()) }
-        };
-        let bar = row![
-            text("Steam Deck").size(TEXT_SIZE).color(ACCENT),
-            space::horizontal(),
-            tab("ProtonUp", Section::Proton),
-            tab("Flatseal", Section::Seal),
-            tab("System", Section::System),
-            tab("Log", Section::Log),
+        let nav = |label: &'static str, s: Section| nav_item(label, self.section == s, Msg::Section(s));
+        let side = column![
+            heading("ProtonUp"),
+            self.proton.side(self.section == Section::Proton).map(Msg::Proton),
+            heading("Flatseal"),
+            container(self.seal.side(self.section == Section::Seal).map(Msg::Seal)).height(Fill),
+            nav("System", Section::System),
+            nav("Log", Section::Log),
         ]
-        .spacing(SPACING)
-        .align_y(iced::Alignment::Center);
-        let body: Element<Msg> = match self.section {
-            Section::Proton => self.proton.view().map(Msg::Proton),
-            Section::Seal => self.seal.view().map(Msg::Seal),
-            Section::System => container(self.system.view().map(Msg::System)).padding(PAD).into(),
-            Section::Log => {
-                let path = log::path();
-                container(
-                    column![
-                        text(path.display().to_string()).size(SMALL_SIZE),
-                        button(text("Refresh").size(SMALL_SIZE)).padding(8).on_press(Msg::RefreshLog).style(quiet_button()),
-                        scrollable(text(log::tail(300)).size(SMALL_SIZE)).height(Fill).width(Fill),
-                    ]
-                    .spacing(SPACING),
-                )
-                .padding(PAD)
-                .into()
-            }
+        .spacing(8)
+        .height(Fill);
+        let main: Element<Msg> = match self.section {
+            Section::Proton => self.proton.main().map(Msg::Proton),
+            Section::Seal => self.seal.main().map(Msg::Seal),
+            Section::System => self.system.view().map(Msg::System),
+            Section::Log => column![
+                text(log::path().display().to_string()).size(SMALL_SIZE),
+                button(text("Refresh").size(SMALL_SIZE)).padding(8).on_press(Msg::RefreshLog).style(quiet_button()),
+                scrollable(text(log::tail(300)).size(SMALL_SIZE)).height(Fill).width(Fill),
+            ]
+            .spacing(SPACING)
+            .into(),
         };
-        column![container(bar).padding([PAD, PAD]), body].into()
+        shell(side.into(), main)
     }
 }

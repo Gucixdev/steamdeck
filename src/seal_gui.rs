@@ -4,7 +4,7 @@ use crate::flatpak::{self, App as FpApp, GLOBAL};
 use crate::perms::{self, Layers, Tri, SECTIONS};
 use crate::portals::{self, Answer, Grant, PORTALS};
 use crate::ui::{
-    accent_button, danger_button, nav_item, quiet_button, segment, shell, AMBER, DIM, GREEN,
+    accent_button, danger_button, nav_item, quiet_button, segment, AMBER, DIM, GREEN,
     ACCENT, RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
 use iced::widget::{button, column, pick_list, row, scrollable, space, text, text_input, Column};
@@ -54,6 +54,16 @@ pub struct App {
     confirm_reset: bool,
     loading: bool,
     grants: Vec<Grant>,
+}
+
+/// What the list shows for a permission name; the real name stays in the override file. The sound
+/// socket is called pulseaudio, but PipeWire answers on it as well.
+fn pretty(name: &str) -> String {
+    match name {
+        "pulseaudio" => "sound".to_string(),
+        "xdg-run/pipewire-0" => "pipewire".to_string(),
+        n => n.to_string(),
+    }
 }
 
 impl App {
@@ -246,12 +256,13 @@ impl App {
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Msg> {
-        // left: the app list
+    /// The app list with its search box, for the launcher's single sidebar.
+    pub fn side(&self, active: bool) -> Element<'_, Msg> {
+        // the app list
         let q = self.search.to_lowercase();
         let mut items: Vec<Element<Msg>> = Vec::new();
         let mut entry = |id: String, label: String| {
-            items.push(nav_item(label, id == self.selected, Msg::Select(id)));
+            items.push(nav_item(label, active && id == self.selected, Msg::Select(id)));
         };
         entry(GLOBAL.to_string(), "All apps (global)".to_string());
         for a in &self.apps {
@@ -271,8 +282,11 @@ impl App {
             scrollable(list).height(Fill),
         ]
         .spacing(SPACING);
+        left.into()
+    }
 
-        // right: the permissions
+    pub fn main(&self) -> Element<'_, Msg> {
+        // the permissions
         let mut right = Column::new().spacing(SPACING);
         let mut head = row![space::horizontal()]
             .spacing(SPACING)
@@ -321,7 +335,7 @@ impl App {
                 right = right.push(
                     column![
                         row![
-                            text(name.to_string()).size(TEXT_SIZE),
+                            text(pretty(name)).size(TEXT_SIZE),
                             space::horizontal(),
                             pick("default", Tri::Default),
                             pick("on", Tri::Allow),
@@ -528,13 +542,10 @@ impl App {
             .spacing(SPACING),
         );
 
-        shell(
-            left.into(),
-            scrollable(right.padding(iced::Padding {
-                right: 16.0,
-                ..iced::Padding::ZERO
-            }))
-            .into(),
-        )
+        scrollable(right.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .into()
     }
 }
