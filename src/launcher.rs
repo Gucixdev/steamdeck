@@ -1,8 +1,8 @@
 //! The one program: Home, ProtonUp, Flatseal and Settings (System + Log) as four tabs of one window.
 //! Each tab has the same layout (`ui::shell`: a sidebar and a main area); this file only switches.
 use crate::ui::{
-    accent_button, card_busy, nav_item, page_title, quiet_button, shell, theme, warning_card,
-    ACCENT, PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
+    accent_button, card_busy, nav_item, page_title, quiet_button, shell, theme, ACCENT, PAD,
+    SMALL_SIZE, SPACING, TEXT_SIZE,
 };
 use crate::{
     flatapps, health, log, proton_gui, scripts, seal_gui, steaminstalls, storage_gui, system,
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 /// Which Home button started the running update, so only that one shows the spinner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Job {
+pub enum Job {
     Protons,
     Flatpaks,
     Everything,
@@ -49,7 +49,8 @@ pub struct Start {
 }
 
 #[derive(Debug, Clone)]
-enum Msg {
+/// Public so that the headless interface tests (tests/ui.rs) can drive the whole window.
+pub enum Msg {
     Go(Section),
     UpdateProtons,
     UpdateFlatpaks,
@@ -67,7 +68,7 @@ enum Msg {
     Tick,
 }
 
-struct App {
+pub struct App {
     section: Section,
     proton: proton_gui::App,
     seal: seal_gui::App,
@@ -108,11 +109,18 @@ pub fn run(start: Start) -> iced::Result {
 }
 
 impl App {
-    fn new(start: Start) -> (Self, Task<Msg>) {
+    pub fn new(start: Start) -> (Self, Task<Msg>) {
         let home = dirs::home_dir().unwrap_or_default();
         let pinned = start.dir.is_some();
         let dir = crate::steam::default_tool_dir(&home, start.dir.as_deref());
-        let (proton, pt) = proton_gui::App::new(dir, pinned, start.tab.as_deref());
+        // the ProtonUp page that is open decides which table the Proton part shows
+        let proton_tab = match start.section {
+            Section::Games => Some("games"),
+            Section::Get => Some("available"),
+            Section::Installed => Some("installed"),
+            _ => start.tab.as_deref(),
+        };
+        let (proton, pt) = proton_gui::App::new(dir, pinned, proton_tab);
         let (seal, st) = seal_gui::App::new(start.app.clone());
         let (system, yt) = system::State::new();
         let (steam, wt) = steaminstalls::State::new();
@@ -153,7 +161,7 @@ impl App {
         )
     }
 
-    fn update(&mut self, m: Msg) -> Task<Msg> {
+    pub fn update(&mut self, m: Msg) -> Task<Msg> {
         let t = match m {
             Msg::Go(sec) => {
                 self.section = sec;
@@ -240,23 +248,17 @@ impl App {
     }
 
     /// Four tabs on top (Home, ProtonUp, Flatseal, Settings); the sidebar belongs to the tab.
-    fn view(&self) -> Element<'_, Msg> {
+    pub fn view(&self) -> Element<'_, Msg> {
         let running = self.proton.is_busy() || self.apps.is_updating();
         let nav = |label: &'static str, s: Section| nav_item(label, self.section == s, Msg::Go(s));
+        // two tools, done properly: ProtonUp and Flatseal (with the Flatpak apps page: uninstall,
+        // clear data). The other pages stay in the code but are not offered.
         let in_proton = matches!(
             self.section,
-            Section::Games | Section::Get | Section::Installed
+            Section::Games | Section::Get | Section::Installed | Section::Storage
         );
-        let in_seal = self.section == Section::Perms;
-        let in_settings = matches!(
-            self.section,
-            Section::System
-                | Section::Steam
-                | Section::Apps
-                | Section::Scripts
-                | Section::Health
-                | Section::Log
-        );
+        let in_seal = matches!(self.section, Section::Perms | Section::Apps);
+        let in_log = self.section == Section::Log;
         let top_tab = |label: &'static str, goto: Section, on: bool| {
             let b = button(text(label).size(TEXT_SIZE))
                 .padding([8, 18])
@@ -273,7 +275,7 @@ impl App {
             top_tab("Home", Section::Home, self.section == Section::Home),
             top_tab("ProtonUp", Section::Games, in_proton),
             top_tab("Flatseal", Section::Perms, in_seal),
-            top_tab("Settings", Section::System, in_settings),
+            top_tab("Log", Section::Log, in_log),
         ]
         .spacing(SPACING)
         .align_y(iced::Alignment::Center);
@@ -283,26 +285,20 @@ impl App {
                 column![
                     nav("Proton for my games", Section::Games),
                     nav("Download Proton", Section::Get),
-                    nav("Game storage", Section::Storage),
                 ]
                 .spacing(8)
                 .into(),
             )
         } else if in_seal {
-            Some(self.seal.side(true).map(Msg::Seal))
-        } else if in_settings {
-            Some(
-                column![
-                    nav("System tweaks", Section::System),
-                    nav("Scripts", Section::Scripts),
-                    nav("Health check", Section::Health),
-                    nav("Flatpak apps", Section::Apps),
-                    nav("Steam installs", Section::Steam),
-                    nav("Log", Section::Log)
-                ]
-                .spacing(8)
-                .into(),
-            )
+            let mut c = column![
+                nav("Permissions", Section::Perms),
+                nav("Uninstall / clear data", Section::Apps),
+            ]
+            .spacing(8);
+            if self.section == Section::Perms {
+                c = c.push(self.seal.side(true).map(Msg::Seal));
+            }
+            Some(c.height(iced::Fill).into())
         } else {
             None
         };
@@ -318,16 +314,6 @@ impl App {
         let main: Element<Msg> = match self.section {
             Section::Home => column![
                 page_title("Steam Deck", "One click each. Results appear below."),
-                if self.steam.count() > 1 {
-                    warning_card(
-                        "Two Steam installs found",
-                        "Flatpak and system Steam are both here, and games can be split between them. Pick which one to uninstall.",
-                        "Choose",
-                        Msg::Go(Section::Steam),
-                    )
-                } else {
-                    column![].into()
-                },
                 card_busy(
                     "Update Protons",
                     "Installs the newest version of every Proton you have and removes the older ones. Games on an old one are moved to the new one.",

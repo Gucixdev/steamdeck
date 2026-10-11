@@ -35,3 +35,7 @@ strip = true
 # faster dev builds: no debug info for our own crate (stack traces and panics still have file:line)
 [profile.dev.package.steamdeck]
 debug = "line-tables-only"
+
+[dev-dependencies]
+iced_test = "0.14"
+iced_runtime = "0.14"

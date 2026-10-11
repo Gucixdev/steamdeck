@@ -134,6 +134,22 @@ and applies it only after you confirm. The actions below are what the System sec
 Every file starts with a `managed by steamdeck/setup` line; a file without it is never overwritten or
 removed. `--root DIR` writes into a test tree and only prints the commands, `--dry-run` changes nothing.
 
+## Scope
+
+For now the program does two things, and does them properly: **ProtonUp** (download, update and remove
+Protons, pick the Proton and launch options per game) and **Flatseal** (permissions, portals, and the
+Flatpak apps page: uninstall, uninstall with data, clear data, leftovers of removed apps). Home has the
+Update buttons. The other pages written earlier (system tweaks, scripts, health check, storage, Steam
+installs) are in the code but are not offered.
+
+## Tests
+
+`cargo test` runs the unit tests and `tests/ui.rs`: the whole window headless, with real clicks on the
+buttons by their text, every background task run to the end, against a fake `flatpak`, a fake Steam folder
+and a local GitHub. They cover uninstall, clear data, leftovers, "No" changes nothing, update (newest
+installed, old ones removed, the game moved), Flatpak update, a permission written for one app only, the
+portal store, and the per-game Proton with its backup. No clicking by hand is needed for those.
+
 ## Development
 
 ```sh

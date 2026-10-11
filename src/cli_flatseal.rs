@@ -25,6 +25,9 @@ usage:
   flatseal portals APP              what the portal permission store holds for APP
   flatseal portal APP NAME yes|no|default   NAME: background, notification, camera, microphone, speakers
   flatseal revoke APP TABLE ID      take back one stored entry (see `portals`)
+  flatseal apps                     installed apps with the size of the program and of its data
+  flatseal uninstall APP [--data]   uninstall an app (and its data with --data)
+  flatseal clear-data APP           delete the data an app keeps under ~/.var/app
   flatseal reset APP                drop the app's own overrides
   flatseal fs-add APP PATH[:ro|:rw|:create]
   flatseal fs-remove APP PATH
@@ -118,6 +121,43 @@ pub fn run(args: Vec<String>) -> ExitCode {
                 }
             }
             ExitCode::SUCCESS
+        }
+        "apps" => {
+            for i in crate::flatapps::list() {
+                say!(
+                    "{:<42} {:>10} {:>10}  {}",
+                    i.id,
+                    i.size,
+                    crate::ui::human_bytes(i.data_bytes),
+                    i.name
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        "uninstall" => {
+            let Some(id) = a(1) else {
+                return fail("uninstall needs an app id");
+            };
+            let with_data = args.iter().any(|x| x == "--data");
+            let out = crate::flatapps::act(id, crate::flatapps::Action::Uninstall(with_data));
+            say!("{out}");
+            if out.contains("failed") || out.contains("not an installed") {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        "clear-data" => {
+            let Some(id) = a(1) else {
+                return fail("clear-data needs an app id");
+            };
+            let out = crate::flatapps::act(id, crate::flatapps::Action::DeleteData);
+            say!("{out}");
+            if out.starts_with("deleted") {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
         }
         "portals" => {
             let Some(id) = a(1) else {

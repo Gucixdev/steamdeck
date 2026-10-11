@@ -68,7 +68,7 @@ fn valid_id(id: &str) -> bool {
     crate::flatpak::valid_id(id)
 }
 
-fn list() -> Vec<Item> {
+pub fn list() -> Vec<Item> {
     let out = Command::new("flatpak")
         .args([
             "list",
@@ -84,7 +84,34 @@ fn list() -> Vec<Item> {
     for i in &mut v {
         i.data_bytes = dir_size(&data_dir(&i.id));
     }
+    // data left behind by apps that are not installed any more
+    let home = dirs::home_dir().unwrap_or_default();
+    if let Ok(rd) = std::fs::read_dir(home.join(".var/app")) {
+        let mut orphans: Vec<Item> = rd
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| {
+                let id = e.file_name().to_string_lossy().to_string();
+                (valid_id(&id) && !v.iter().any(|i| i.id == id)).then(|| Item {
+                    name: id.clone(),
+                    size: "not installed".into(),
+                    installation: String::new(),
+                    data_bytes: dir_size(&e.path()),
+                    id,
+                })
+            })
+            .collect();
+        orphans.sort_by_key(|o| std::cmp::Reverse(o.data_bytes));
+        v.extend(orphans);
+    }
     v
+}
+
+impl Item {
+    /// An app that is gone but whose data is still under ~/.var/app.
+    pub fn is_leftover(&self) -> bool {
+        self.installation.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,6 +339,16 @@ impl State {
                             .align_y(iced::Alignment::Center)
                             .into()
                         }
+                        _ if it.is_leftover() => row![
+                            text("data of a removed app").size(SMALL_SIZE).color(DIM),
+                            button(text("Clear data").size(SMALL_SIZE))
+                                .padding([6, 10])
+                                .on_press(Msg::Ask(n, Action::DeleteData))
+                                .style(quiet_button()),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
                         _ => row![
                             button(text("Uninstall").size(SMALL_SIZE))
                                 .padding([6, 10])
@@ -531,6 +568,14 @@ fn update_all_streaming(progress: Arc<Mutex<(usize, usize, String)>>) -> String 
     report.join("\n")
 }
 
+/// The same actions as the Flatpak apps page, for the command line. Returns what to print.
+pub fn act(id: &str, a: Action) -> String {
+    match list().into_iter().find(|i| i.id == id) {
+        Some(it) => run(Some(it), a),
+        None => format!("{id} is not an installed Flatpak app (see `flatseal apps`)"),
+    }
+}
+
 fn run(item: Option<Item>, a: Action) -> String {
     run_in(&dirs::home_dir().unwrap_or_default(), item, a)
 }
@@ -551,6 +596,12 @@ fn run_in(home: &std::path::Path, item: Option<Item>, a: Action) -> String {
                 Ok(()) => format!("deleted {}", d.display()),
                 Err(e) => format!("could not delete {}: {e}", d.display()),
             };
+        }
+        (Action::Uninstall(_), Some(it)) if it.is_leftover() => {
+            return format!(
+                "{} is not installed: only its data is left (Clear data)",
+                it.id
+            );
         }
         (Action::Uninstall(with_data), Some(it)) => {
             if !valid_id(&it.id) {

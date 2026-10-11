@@ -299,6 +299,10 @@ pub fn mapping_checked(root: &Path) -> Result<HashMap<u64, String>, String> {
 
 /// True when a Steam client process is running (it would overwrite config.vdf on exit).
 pub fn steam_running() -> bool {
+    // lets the interface tests run on a machine where Steam happens to be open
+    if let Ok(v) = std::env::var("STEAMDECK_STEAM_RUNNING") {
+        return v == "1";
+    }
     let Ok(rd) = fs::read_dir("/proc") else {
         return false;
     };
