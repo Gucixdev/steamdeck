@@ -16,6 +16,7 @@ pub mod games;
 pub mod github;
 pub mod install;
 pub mod proton_gui;
+pub mod recommend;
 pub mod sources;
 pub mod steam;
 

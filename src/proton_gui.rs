@@ -712,6 +712,42 @@ impl App {
                 .padding(8)
                 .width(Fill);
                 let tier = self.protondb.get(&appid).cloned();
+                // a suggestion with its reason, and one button to take it
+                let installed_names: Vec<String> =
+                    r.installed.iter().map(|i| i.tool.clone()).collect();
+                let cur_tool = r.mapping.get(&appid).map(String::as_str);
+                let sug = if appid == 0 {
+                    None
+                } else {
+                    crate::recommend::suggest(tier.as_deref(), cur_tool, &installed_names, &r.valve)
+                };
+                let name_cell: Element<Msg> = match sug {
+                    Some(sg) => {
+                        let label = if sg.tool.is_empty() {
+                            "Steam default".to_string()
+                        } else {
+                            sg.tool.clone()
+                        };
+                        column![
+                            text(name.clone()).size(TEXT_SIZE),
+                            row![
+                                text(format!("Suggested: {label}"))
+                                    .size(SMALL_SIZE)
+                                    .color(ACCENT),
+                                button(text("Use").size(SMALL_SIZE))
+                                    .padding([2, 10])
+                                    .on_press(Msg::SetTool(r.root.clone(), appid, sg.tool.clone()))
+                                    .style(primary_button()),
+                            ]
+                            .spacing(6)
+                            .align_y(iced::Alignment::Center),
+                            text(sg.why.clone()).size(SMALL_SIZE).color(DIM),
+                        ]
+                        .spacing(2)
+                        .into()
+                    }
+                    None => text(name.clone()).size(TEXT_SIZE).into(),
+                };
                 let tier_text: Element<Msg> = match tier.as_deref() {
                     Some(t) => {
                         let c = match t {
@@ -729,9 +765,9 @@ impl App {
                 };
                 col = col.push(table_row(
                     vec![
-                        (text(name).size(TEXT_SIZE).into(), 3),
+                        (name_cell, 5),
                         (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 1),
-                        (tier_text, 2),
+                        (tier_text, 1),
                         (dropdown.into(), 4),
                         (launch_dd.into(), 3),
                     ],
