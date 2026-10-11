@@ -31,7 +31,8 @@
 set -euo pipefail
 
 ARGS=("$@")
-SELF=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)
+SELF=
+[ -z "${BASH_SOURCE[0]:-}" ] || SELF=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)
 [ -f "$SELF" ] || SELF=
 HERE=
 [ -z "$SELF" ] || HERE=$(dirname "$SELF")
