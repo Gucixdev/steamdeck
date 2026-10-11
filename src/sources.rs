@@ -110,7 +110,10 @@ pub fn default_source() -> &'static Source {
 /// Which source a directory name belongs to, for "update all".
 pub fn family_of(name: &str) -> Option<&'static str> {
     let n = name.to_lowercase();
-    if n.starts_with("ge-proton") {
+    // the RTSP builds are named like GE builds but are their own line: never mix them
+    if n.contains("rtsp") {
+        Some("rtsp")
+    } else if n.starts_with("ge-proton") {
         Some("ge")
     } else if n.starts_with("proton-cachyos") {
         Some(if n.contains("v3") {
@@ -145,5 +148,10 @@ mod tests {
             assert!(s.repo.contains('/'));
         }
         assert!(find("nope").is_none());
+    }
+    #[test]
+    fn rtsp_builds_are_not_taken_for_ge() {
+        assert_eq!(family_of("GE-Proton9-27-rtsp15"), Some("rtsp"));
+        assert_eq!(family_of("GE-Proton10-20"), Some("ge"));
     }
 }

@@ -41,6 +41,8 @@ pub struct Start {
 enum Msg {
     Go(Section),
     UpdateProtons,
+    UpdateFlatpaks,
+    UpdateEverything,
     Proton(proton_gui::Msg),
     Seal(seal_gui::Msg),
     System(system::Msg),
@@ -139,6 +141,13 @@ impl App {
                     None => Task::none(),
                 }
             }
+            Msg::UpdateFlatpaks => self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
+            Msg::UpdateEverything => Task::batch([
+                self.proton
+                    .update(proton_gui::Msg::UpdateAll)
+                    .map(Msg::Proton),
+                self.apps.update(flatapps::Msg::UpdateAll).map(Msg::Apps),
+            ]),
             Msg::UpdateProtons => {
                 self.section = Section::Get;
                 let _ = self
@@ -263,17 +272,37 @@ impl App {
         };
         let main: Element<Msg> = match self.section {
             Section::Home => column![
-                page_title("Steam Deck", "Pick what you want to do."),
+                page_title("Steam Deck", "One click each. Results appear below."),
                 if self.steam.count() > 1 {
-                    warning_card("Two Steam installs found", "Flatpak and system Steam are both here, and games can be split between them. Pick which one to uninstall.", "Choose", Msg::Go(Section::Steam))
+                    warning_card(
+                        "Two Steam installs found",
+                        "Flatpak and system Steam are both here, and games can be split between them. Pick which one to uninstall.",
+                        "Choose",
+                        Msg::Go(Section::Steam),
+                    )
                 } else {
                     column![].into()
                 },
-                card("Update Protons", "Download the newest version of every Proton you have installed (Proton-GE if none).", "Update", Msg::UpdateProtons),
-                card("Choose Proton for a game", "Windows games run through Proton. Pick which version each game uses.", "Open", Msg::Go(Section::Games)),
-                card("Get a newer Proton", "Download Proton-GE, CachyOS and others. A newer one often fixes a game that does not start.", "Open", Msg::Go(Section::Get)),
-                card("Flatseal: what apps may touch", "Flatpak apps: allow or block network, sound, files and more, per app or for all.", "Open", Msg::Go(Section::Perms)),
-                card("Settings: make the Deck steadier", "Memory guard, swap size, ssh. Changes only /etc and can be undone.", "Open", Msg::Go(Section::System)),
+                card(
+                    "Update Protons",
+                    "Installs the newest version of every Proton you have and removes the older ones. Games on an old one are moved to the new one.",
+                    "Update",
+                    Msg::UpdateProtons
+                ),
+                card(
+                    "Update Flatpak apps",
+                    "flatpak update for every installed app and runtime.",
+                    "Update",
+                    Msg::UpdateFlatpaks
+                ),
+                card(
+                    "Update everything",
+                    "Both of the above.",
+                    "Update all",
+                    Msg::UpdateEverything
+                ),
+                self.proton.status_view().map(Msg::Proton),
+                self.apps.status_view::<Msg>(),
             ]
             .spacing(SPACING)
             .into(),

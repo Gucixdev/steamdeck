@@ -283,6 +283,20 @@ pub fn mapping(root: &Path) -> HashMap<u64, String> {
     out
 }
 
+/// Like `mapping`, but a config that exists and cannot be read is an error, so that callers who
+/// decide something from "nobody uses this tool" do not take a broken file for an empty one.
+pub fn mapping_checked(root: &Path) -> Result<HashMap<u64, String>, String> {
+    let p = config_path(root);
+    match fs::read_to_string(&p) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HashMap::new()),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+        Ok(t) => {
+            parse(&t).map_err(|e| format!("{}: {e}", p.display()))?;
+            Ok(mapping(root))
+        }
+    }
+}
+
 /// True when a Steam client process is running (it would overwrite config.vdf on exit).
 pub fn steam_running() -> bool {
     let Ok(rd) = fs::read_dir("/proc") else {

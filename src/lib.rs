@@ -21,6 +21,7 @@ pub mod recommend;
 pub mod sources;
 pub mod steam;
 pub mod storage;
+pub mod update;
 
 // flatseal: Flatpak permission overrides and portal permissions
 pub mod flatapps;

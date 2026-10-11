@@ -95,6 +95,8 @@ pub enum Action {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    /// `flatpak update` for everything
+    UpdateAll,
     Loaded(Vec<Item>),
     Ask(usize, Action),
     Cancel,
@@ -128,6 +130,31 @@ impl State {
 
     pub fn update(&mut self, m: Msg) -> Task<Msg> {
         match m {
+            Msg::UpdateAll => {
+                self.busy = true;
+                self.output = "updating Flatpak apps...".into();
+                return Task::perform(
+                    async {
+                        match Command::new("flatpak")
+                            .args(["update", "-y", "--noninteractive"])
+                            .output()
+                        {
+                            Ok(o) => {
+                                let mut t = String::from_utf8_lossy(&o.stdout).to_string();
+                                t.push_str(&String::from_utf8_lossy(&o.stderr));
+                                let t = t.trim().to_string();
+                                if o.status.success() {
+                                    format!("flatpak update finished\n{t}")
+                                } else {
+                                    format!("flatpak update failed\n{t}")
+                                }
+                            }
+                            Err(e) => format!("could not start flatpak: {e}"),
+                        }
+                    },
+                    Msg::Done,
+                );
+            }
             Msg::Loaded(v) => {
                 self.items = Some(v);
                 self.busy = false;
@@ -152,6 +179,16 @@ impl State {
             }
         }
         Task::none()
+    }
+
+    /// The last result, for Home.
+    pub fn status_view<'a, M: 'a>(&'a self) -> Element<'a, M> {
+        let t = if self.busy && self.output.is_empty() {
+            "working...".to_string()
+        } else {
+            self.output.clone()
+        };
+        text(t).size(SMALL_SIZE).into()
     }
 
     pub fn view(&self) -> Element<'_, Msg> {
@@ -186,6 +223,10 @@ impl State {
             .align_y(iced::Alignment::Center),
         ]
         .spacing(SPACING);
+        // the result goes at the top: at the bottom of a long list it was never seen
+        if !self.output.is_empty() {
+            col = col.push(text(self.output.clone()).size(SMALL_SIZE));
+        }
         match &self.items {
             None => col = col.push(text("Looking...").size(TEXT_SIZE).color(DIM)),
             Some(v) if v.is_empty() => {
@@ -263,9 +304,6 @@ impl State {
         }
         if self.busy && self.items.is_some() {
             col = col.push(text("working...").size(TEXT_SIZE).color(DIM));
-        }
-        if !self.output.is_empty() {
-            col = col.push(text(self.output.clone()).size(SMALL_SIZE));
         }
         scrollable(col.padding(iced::Padding {
             right: 16.0,
@@ -397,6 +435,29 @@ mod tests {
         }
         assert!(home.join(".var/app/org.b.B").is_dir());
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_confirmed_action_starts() {
+        let (mut s, _) = State::new();
+        s.items = Some(vec![item("org.a.A")]);
+        for a in [
+            Action::Uninstall(false),
+            Action::Uninstall(true),
+            Action::DeleteData,
+        ] {
+            s.output.clear();
+            let _ = s.update(Msg::Ask(0, a.clone()));
+            let _ = s.update(Msg::Do(0, a.clone()));
+            assert_eq!(
+                s.output, "working...",
+                "{a:?} must start after its question was confirmed"
+            );
+        }
+        s.output.clear();
+        let _ = s.update(Msg::Ask(usize::MAX, Action::Unused));
+        let _ = s.update(Msg::Do(usize::MAX, Action::Unused));
+        assert_eq!(s.output, "working...");
     }
 
     #[test]

@@ -25,7 +25,8 @@ usage:
   protonup remove NAME           remove an installed tool (its directory name)
   protonup path                  the directory used for installs
   protonup update                install the newest release of every kind of tool you have installed
-                                 (what the weekly timer runs; sends a desktop notification)
+                                 (then removes the older ones, moving games to the new one;
+                                 what the weekly timer runs; sends a desktop notification)
   protonup games                 installed games and the tool each one uses
   protonup use APPID TOOL        run a game with TOOL (a name from `installed`), or `default`; Steam must be closed
 
@@ -212,7 +213,12 @@ pub fn run(mut args: Vec<String>) -> ExitCode {
                 }
                 say!("{}: installing {}", s.name, rel.tag_name);
                 match install::install(s, rel, &dir_path, &mut |_| {}) {
-                    Ok(_) => done.push(rel.tag_name.clone()),
+                    Ok(_) => {
+                        done.push(rel.tag_name.clone());
+                        for l in crate::update::cleanup_old(&dir_path, id, &rel.dir_name(s), true) {
+                            say!("  {l}");
+                        }
+                    }
                     Err(e) => {
                         eprintln!("protonup: {}: {e}", rel.tag_name);
                         failed += 1;

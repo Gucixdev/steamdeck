@@ -46,6 +46,8 @@ pub enum Msg {
     Refresh,
     /// install the newest release of every kind of Proton that is installed (or Proton-GE if none)
     UpdateAll,
+    /// what the cleanup of old versions did
+    Cleaned(Vec<String>),
     UpdateLoaded(&'static str, Result<(Vec<Release>, bool), String>),
     LoadMore,
     Loaded(&'static str, usize, Result<(Vec<Release>, bool), String>),
@@ -159,6 +161,8 @@ pub struct App {
     game_filter: String,
     protondb: HashMap<u64, String>,
     db_busy: bool,
+    /// (release tag, family, directory name) of installs whose older versions go once they are in
+    pending_cleanup: Vec<(String, String, String)>,
     /// the category dropdown shows Valve's own Protons instead of a GitHub project
     valve_view: bool,
     /// appid -> Steam lists a Linux build
@@ -205,6 +209,7 @@ impl App {
             protondb: crate::protondb::cached(),
             db_busy: false,
             valve_view: false,
+            pending_cleanup: Vec::new(),
             native: crate::protondb::native_cached(),
             launch_edit: HashMap::new(),
         };
@@ -290,6 +295,21 @@ impl App {
                     let have: Vec<String> = self.installed.iter().map(|i| i.name.clone()).collect();
                     // the newest release only (the list is newest first)
                     if let Some(r) = rels.into_iter().find(|r| r.archive(src).is_some()) {
+                        let dirname = r.dir_name(src);
+                        if have.contains(&dirname) {
+                            // already the newest: only the older ones may need to go
+                            let dir = self.dir.clone();
+                            let fam = src.id.to_string();
+                            return Task::perform(
+                                async move { crate::update::cleanup_old(&dir, &fam, &dirname, true) },
+                                Msg::Cleaned,
+                            );
+                        }
+                        self.pending_cleanup.push((
+                            r.tag_name.clone(),
+                            src.id.to_string(),
+                            dirname,
+                        ));
                         if !have.contains(&r.dir_name(src))
                             && !self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
                         {
@@ -522,6 +542,19 @@ impl App {
             Msg::Event(Event::Finished(tag, r)) => {
                 self.busy.retain(|b| b.tag != tag);
                 let reload = self.reload();
+                let mut extra: Vec<Task<Msg>> = Vec::new();
+                if r.is_ok() {
+                    if let Some(i) = self.pending_cleanup.iter().position(|(t, _, _)| *t == tag) {
+                        let (_, fam, dirname) = self.pending_cleanup.remove(i);
+                        let dir = self.dir.clone();
+                        extra.push(Task::perform(
+                            async move { crate::update::cleanup_old(&dir, &fam, &dirname, true) },
+                            Msg::Cleaned,
+                        ));
+                    }
+                } else {
+                    self.pending_cleanup.retain(|(t, _, _)| *t != tag);
+                }
                 match r {
                     Ok(o) => {
                         let note = if o.verified {
@@ -534,7 +567,16 @@ impl App {
                     // one failure does not stop the rest; the partial download stays and resumes next time
                     Err(e) => self.error = Some(format!("{tag}: {e}")),
                 }
-                return Task::batch([reload, self.start_next()]);
+                extra.push(reload);
+                extra.push(self.start_next());
+                return Task::batch(extra);
+            }
+            Msg::Cleaned(rep) => {
+                if !rep.is_empty() {
+                    crate::log::write("update", &rep.join("\n"));
+                    self.notice = Some(rep.join("; "));
+                }
+                return self.reload();
             }
         }
         if self.busy.is_empty() && self.queue.is_empty() {
@@ -566,7 +608,8 @@ impl App {
         .into()
     }
 
-    pub fn main(&self) -> Element<'_, Msg> {
+    /// Progress of the running installs and the last notice or error; also shown on Home.
+    pub fn status_view(&self) -> Element<'_, Msg> {
         let mut status = Column::new().spacing(6);
         for b in &self.busy {
             let pct = if b.total > 0 {
@@ -603,7 +646,11 @@ impl App {
         if let Some(e) = &self.error {
             status = status.push(text(e.clone()).size(SMALL_SIZE).color(RED));
         }
+        status.into()
+    }
 
+    pub fn main(&self) -> Element<'_, Msg> {
+        let status = self.status_view();
         let body: Element<Msg> = match self.tab {
             Tab::Installed => self.installed_view(),
             Tab::Available => self.available_view(),
