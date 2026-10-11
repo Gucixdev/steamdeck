@@ -109,6 +109,7 @@ pub struct State {
     asking: Option<(usize, Action)>,
     output: String,
     busy: bool,
+    started: Option<std::time::Instant>,
 }
 
 fn load() -> Task<Msg> {
@@ -123,6 +124,7 @@ impl State {
                 asking: None,
                 output: String::new(),
                 busy: true,
+                started: None,
             },
             load(),
         )
@@ -132,6 +134,7 @@ impl State {
         match m {
             Msg::UpdateAll => {
                 self.busy = true;
+                self.started = Some(std::time::Instant::now());
                 self.output = "updating Flatpak apps...".into();
                 return Task::perform(
                     async {
@@ -173,6 +176,7 @@ impl State {
                 return Task::perform(async move { run(item, a) }, Msg::Done);
             }
             Msg::Done(o) => {
+                self.started = None;
                 log::write("flatapps", &o);
                 self.output = o;
                 return load();
@@ -181,12 +185,20 @@ impl State {
         Task::none()
     }
 
-    /// The last result, for Home.
-    pub fn status_view<'a, M: 'a>(&'a self) -> Element<'a, M> {
-        let t = if self.busy && self.output.is_empty() {
-            "working...".to_string()
-        } else {
-            self.output.clone()
+    /// True while an update runs (the window keeps its spinner turning).
+    pub fn is_updating(&self) -> bool {
+        self.started.is_some()
+    }
+
+    /// The last result, for Home; while an update runs, a spinner and the time it has taken.
+    pub fn status_view<'a, M: 'a>(&'a self, tick: usize) -> Element<'a, M> {
+        let t = match self.started {
+            Some(t0) => format!(
+                "{} updating Flatpak apps...  {}",
+                crate::ui::spinner(tick),
+                crate::ui::human_duration(t0.elapsed().as_secs())
+            ),
+            None => self.output.clone(),
         };
         text(t).size(SMALL_SIZE).into()
     }

@@ -30,6 +30,22 @@ pub fn theme() -> Theme {
     )
 }
 
+/// "45 s", "3 min 20 s", "1 h 05 min": a time left or elapsed, for progress lines.
+pub fn human_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs} s")
+    } else if secs < 3600 {
+        format!("{} min {:02} s", secs / 60, secs % 60)
+    } else {
+        format!("{} h {:02} min", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// A one-character spinner frame for a counter that goes up.
+pub fn spinner(tick: usize) -> &'static str {
+    ["|", "/", "-", "\\"][tick % 4]
+}
+
 /// "1.4 GB", "312 MB", "12 KB": binary units, one decimal above a megabyte.
 pub fn human_bytes(n: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
@@ -314,6 +330,12 @@ mod tests {
         assert_eq!(human_bytes(2048), "2 KB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
         assert_eq!(human_bytes(1536 * 1024 * 1024), "1.5 GB");
+    }
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(human_duration(5), "5 s");
+        assert_eq!(human_duration(200), "3 min 20 s");
+        assert_eq!(human_duration(3900), "1 h 05 min");
     }
 }
 

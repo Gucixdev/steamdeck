@@ -30,6 +30,23 @@ pub fn cleanup_old(dir: &Path, family: &str, newest_dir: &str, check_steam: bool
             !k.is_empty() && k < newest_key && !i.path.is_symlink()
         })
         .collect();
+    // partial downloads of older versions of this kind (left by an interrupted install) are dead weight
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if let Some(stem) = n.strip_prefix('.').filter(|_| n.ends_with(".part")) {
+                let k = install::version_key(stem);
+                if family_of(stem) == Some(family)
+                    && !k.is_empty()
+                    && k < newest_key
+                    && e.path().is_file()
+                    && std::fs::remove_file(e.path()).is_ok()
+                {
+                    report.push(format!("removed the partial download {n}"));
+                }
+            }
+        }
+    }
     if old.is_empty() {
         return report;
     }
@@ -173,6 +190,26 @@ mod tests {
         let rep = cleanup_old(&dir, "ge", "GE-Proton10-20", false);
         assert!(rep[0].starts_with("kept"), "{rep:?}");
         assert!(dir.join("GE-Proton10-19").is_dir());
+    }
+
+    #[test]
+    fn partial_downloads_of_older_versions_are_cleared_but_not_newer_or_other_ones() {
+        let r = steam_root("part");
+        tool(&r, "GE-Proton10-20");
+        let dir = r.join("compatibilitytools.d");
+        fs::write(dir.join(".GE-Proton10-5-x86_64.tar.gz.part"), "x").unwrap();
+        fs::write(dir.join(".GE-Proton11-1-x86_64.tar.gz.part"), "x").unwrap();
+        fs::write(dir.join(".proton-cachyos-9.0-x.tar.xz.part"), "x").unwrap();
+        fs::write(dir.join("notes.txt"), "x").unwrap();
+        let rep = cleanup_old(&dir, "ge", "GE-Proton10-20", false);
+        assert_eq!(rep.len(), 1, "{rep:?}");
+        assert!(!dir.join(".GE-Proton10-5-x86_64.tar.gz.part").exists());
+        assert!(
+            dir.join(".GE-Proton11-1-x86_64.tar.gz.part").exists(),
+            "a newer one may be in progress"
+        );
+        assert!(dir.join(".proton-cachyos-9.0-x.tar.xz.part").exists());
+        assert!(dir.join("notes.txt").exists());
     }
 
     #[test]

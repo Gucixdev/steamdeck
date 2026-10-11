@@ -133,6 +133,8 @@ struct Busy {
     phase: String,
     done: u64,
     total: u64,
+    /// when the download started moving, and how much was there then (for the speed and the time left)
+    since: Option<(std::time::Instant, u64)>,
 }
 
 #[derive(Default)]
@@ -163,6 +165,10 @@ pub struct App {
     db_busy: bool,
     /// (release tag, family, directory name) of installs whose older versions go once they are in
     pending_cleanup: Vec<(String, String, String)>,
+    /// what the last update did, line by line (shown on Home and on the Proton pages)
+    report: Vec<String>,
+    /// answers still awaited from the "newest release" checks of an update
+    checking: usize,
     /// the category dropdown shows Valve's own Protons instead of a GitHub project
     valve_view: bool,
     /// appid -> Steam lists a Linux build
@@ -210,6 +216,8 @@ impl App {
             db_busy: false,
             valve_view: false,
             pending_cleanup: Vec::new(),
+            report: Vec::new(),
+            checking: 0,
             native: crate::protondb::native_cached(),
             launch_edit: HashMap::new(),
         };
@@ -253,6 +261,7 @@ impl App {
                 phase: "starting".into(),
                 done: 0,
                 total: 0,
+                since: None,
             });
             tasks.push(Task::run(
                 install_stream(src, rel, self.dir.clone()),
@@ -266,6 +275,7 @@ impl App {
         match m {
             Msg::Tab(t) => self.tab = t,
             Msg::UpdateAll => {
+                self.report.clear();
                 self.error = None;
                 self.notice = Some("Checking for newer Protons...".into());
                 let mut ids: Vec<&'static str> = Vec::new();
@@ -279,6 +289,7 @@ impl App {
                 if ids.is_empty() {
                     ids.push("ge");
                 }
+                self.checking = ids.len();
                 let tasks: Vec<Task<Msg>> = ids
                     .into_iter()
                     .filter_map(sources::find)
@@ -290,42 +301,52 @@ impl App {
                     .collect();
                 return Task::batch(tasks);
             }
-            Msg::UpdateLoaded(id, r) => match (sources::find(id), r) {
-                (Some(src), Ok((rels, _))) => {
-                    let have: Vec<String> = self.installed.iter().map(|i| i.name.clone()).collect();
-                    // the newest release only (the list is newest first)
-                    if let Some(r) = rels.into_iter().find(|r| r.archive(src).is_some()) {
-                        let dirname = r.dir_name(src);
-                        if have.contains(&dirname) {
-                            // already the newest: only the older ones may need to go
-                            let dir = self.dir.clone();
-                            let fam = src.id.to_string();
-                            return Task::perform(
-                                async move { crate::update::cleanup_old(&dir, &fam, &dirname, true) },
-                                Msg::Cleaned,
-                            );
+            Msg::UpdateLoaded(id, r) => {
+                self.checking = self.checking.saturating_sub(1);
+                match (sources::find(id), r) {
+                    (Some(src), Ok((rels, _))) => {
+                        let have: Vec<String> =
+                            self.installed.iter().map(|i| i.name.clone()).collect();
+                        // the newest release only (the list is newest first)
+                        if let Some(r) = rels.into_iter().find(|r| r.archive(src).is_some()) {
+                            let dirname = r.dir_name(src);
+                            if have.contains(&dirname) {
+                                // already the newest: only the older ones may need to go
+                                self.report.push(format!(
+                                    "{}: {} is the newest and is installed",
+                                    src.name, r.tag_name
+                                ));
+                                let dir = self.dir.clone();
+                                let fam = src.id.to_string();
+                                return Task::perform(
+                                    async move {
+                                        crate::update::cleanup_old(&dir, &fam, &dirname, true)
+                                    },
+                                    Msg::Cleaned,
+                                );
+                            }
+                            self.pending_cleanup.push((
+                                r.tag_name.clone(),
+                                src.id.to_string(),
+                                dirname,
+                            ));
+                            if !have.contains(&r.dir_name(src))
+                                && !self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
+                            {
+                                self.notice = Some(format!("Installing {} ...", r.tag_name));
+                                self.queue.push_back((src, r));
+                                self.queue_total += 1;
+                                return self.start_next();
+                            }
                         }
-                        self.pending_cleanup.push((
-                            r.tag_name.clone(),
-                            src.id.to_string(),
-                            dirname,
-                        ));
-                        if !have.contains(&r.dir_name(src))
-                            && !self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
-                        {
-                            self.notice = Some(format!("Installing {} ...", r.tag_name));
-                            self.queue.push_back((src, r));
-                            self.queue_total += 1;
-                            return self.start_next();
+                        if self.busy.is_empty() && self.queue.is_empty() {
+                            self.notice = Some("Everything is up to date.".into());
                         }
                     }
-                    if self.busy.is_empty() && self.queue.is_empty() {
-                        self.notice = Some("Everything is up to date.".into());
-                    }
+                    (_, Err(e)) => self.error = Some(e),
+                    _ => {}
                 }
-                (_, Err(e)) => self.error = Some(e),
-                _ => {}
-            },
+            }
             Msg::GameFilter(q) => self.game_filter = q,
             Msg::SourceName(n) if n == VALVE_CATEGORY => {
                 self.valve_view = true;
@@ -533,6 +554,9 @@ impl App {
                         Progress::Phase(s) => b.phase = s,
                         Progress::Download { done, total } => {
                             b.phase = "downloading".into();
+                            if b.since.is_none() {
+                                b.since = Some((std::time::Instant::now(), done));
+                            }
                             b.done = done;
                             b.total = total;
                         }
@@ -557,6 +581,7 @@ impl App {
                 }
                 match r {
                     Ok(o) => {
+                        self.report.push(format!("installed {tag}"));
                         let note = if o.verified {
                             ""
                         } else {
@@ -565,7 +590,10 @@ impl App {
                         self.notice = Some(format!("Installed {tag}{note}. Restart Steam, then pick it in the game's Compatibility settings."));
                     }
                     // one failure does not stop the rest; the partial download stays and resumes next time
-                    Err(e) => self.error = Some(format!("{tag}: {e}")),
+                    Err(e) => {
+                        self.report.push(format!("{tag} failed: {e}"));
+                        self.error = Some(format!("{tag}: {e}"));
+                    }
                 }
                 extra.push(reload);
                 extra.push(self.start_next());
@@ -574,7 +602,7 @@ impl App {
             Msg::Cleaned(rep) => {
                 if !rep.is_empty() {
                     crate::log::write("update", &rep.join("\n"));
-                    self.notice = Some(rep.join("; "));
+                    self.report.extend(rep);
                 }
                 return self.reload();
             }
@@ -609,28 +637,90 @@ impl App {
     }
 
     /// Progress of the running installs and the last notice or error; also shown on Home.
-    pub fn status_view(&self) -> Element<'_, Msg> {
+    /// True while an update or an install is running, so the window keeps its spinner turning.
+    pub fn is_busy(&self) -> bool {
+        !self.busy.is_empty() || !self.queue.is_empty() || self.checking > 0
+    }
+
+    pub fn status_view(&self, tick: usize) -> Element<'_, Msg> {
+        let spin = crate::ui::spinner(tick);
         let mut status = Column::new().spacing(6);
+        if self.checking > 0 {
+            status =
+                status.push(text(format!("{spin} checking for newer versions...")).size(TEXT_SIZE));
+        }
+        let mut speed_sum = 0.0f64;
         for b in &self.busy {
             let pct = if b.total > 0 {
                 b.done as f32 / b.total as f32
             } else {
                 0.0
             };
+            let (speed, eta) = match b.since {
+                Some((t0, d0)) if b.phase == "downloading" => {
+                    let el = t0.elapsed().as_secs_f64();
+                    let sp = if el > 0.5 {
+                        (b.done.saturating_sub(d0)) as f64 / el
+                    } else {
+                        0.0
+                    };
+                    speed_sum += sp;
+                    let left = b.total.saturating_sub(b.done) as f64;
+                    (
+                        sp,
+                        if sp > 1.0 {
+                            Some((left / sp) as u64)
+                        } else {
+                            None
+                        },
+                    )
+                }
+                _ => (0.0, None),
+            };
+            let detail = if b.phase == "downloading" {
+                let mut d = format!("{} / {}", human_bytes(b.done), human_bytes(b.total));
+                if speed > 0.0 {
+                    d.push_str(&format!("  {}/s", human_bytes(speed as u64)));
+                }
+                if let Some(e) = eta {
+                    d.push_str(&format!("  {} left", crate::ui::human_duration(e)));
+                }
+                d
+            } else {
+                String::new()
+            };
             status = status.push(
                 row![
-                    text(format!("{}: {}", b.tag, b.phase)).size(TEXT_SIZE),
-                    progress_bar(0.0..=1.0, pct).length(Length::Fill),
-                    text(format!(
-                        "{} / {}",
-                        human_bytes(b.done),
-                        human_bytes(b.total)
-                    ))
-                    .size(SMALL_SIZE)
-                    .color(DIM),
+                    text(format!("{spin} {}: {}", b.tag, b.phase)).size(TEXT_SIZE),
+                    progress_bar(0.0..=1.0, if b.phase == "downloading" { pct } else { 1.0 })
+                        .length(Length::Fill),
+                    text(detail).size(SMALL_SIZE).color(DIM),
                 ]
                 .spacing(SPACING)
                 .align_y(iced::Alignment::Center),
+            );
+        }
+        // the whole job: what is left in the running downloads plus the ones still waiting
+        if self.busy.len() + self.queue.len() > 1 && speed_sum > 1.0 {
+            let mut left: u64 = self
+                .busy
+                .iter()
+                .map(|b| b.total.saturating_sub(b.done))
+                .sum();
+            left += self
+                .queue
+                .iter()
+                .filter_map(|(src, r)| r.archive(src))
+                .map(|a| a.size)
+                .sum::<u64>();
+            status = status.push(
+                text(format!(
+                    "{} item(s) in all, about {} left",
+                    self.busy.len() + self.queue.len(),
+                    crate::ui::human_duration((left as f64 / speed_sum) as u64)
+                ))
+                .size(SMALL_SIZE)
+                .color(ACCENT),
             );
         }
         if self.queue_total > 1 {
@@ -639,6 +729,9 @@ impl App {
                     .size(SMALL_SIZE)
                     .color(DIM),
             );
+        }
+        for l in self.report.iter().rev().take(12).rev() {
+            status = status.push(text(l.clone()).size(SMALL_SIZE).color(GREEN));
         }
         if let Some(n) = &self.notice {
             status = status.push(text(n.clone()).size(SMALL_SIZE).color(GREEN));
@@ -650,7 +743,7 @@ impl App {
     }
 
     pub fn main(&self) -> Element<'_, Msg> {
-        let status = self.status_view();
+        let status = self.status_view(0);
         let body: Element<Msg> = match self.tab {
             Tab::Installed => self.installed_view(),
             Tab::Available => self.available_view(),

@@ -52,6 +52,7 @@ enum Msg {
     Storage(storage_gui::Msg),
     RefreshLog,
     Key(iced::keyboard::Key, iced::keyboard::Modifiers),
+    Tick,
 }
 
 struct App {
@@ -64,6 +65,8 @@ struct App {
     health: health::State,
     storage: storage_gui::State,
     seen: [Option<String>; 2],
+    tick: usize,
+    frames: usize,
 }
 
 pub fn run(start: Start) -> iced::Result {
@@ -71,13 +74,19 @@ pub fn run(start: Start) -> iced::Result {
     log::write("launcher", "start");
     iced::application(move || App::new(start.clone()), App::update, App::view)
         .title("Steam Deck")
-        .subscription(|_: &App| {
-            iced::keyboard::listen().filter_map(|e| match e {
+        .subscription(|app: &App| {
+            let keys = iced::keyboard::listen().filter_map(|e| match e {
                 iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
                     Some(Msg::Key(key, modifiers))
                 }
                 _ => None,
-            })
+            });
+            // the spinner and the clocks only tick while something runs
+            if app.proton.is_busy() || app.apps.is_updating() {
+                iced::Subscription::batch([keys, iced::window::frames().map(|_| Msg::Tick)])
+            } else {
+                keys
+            }
         })
         .theme(|_: &App| theme())
         .window_size((1100.0, 700.0))
@@ -111,6 +120,8 @@ impl App {
             health,
             storage,
             seen: [None, None],
+            tick: 0,
+            frames: 0,
         };
         (
             app,
@@ -165,6 +176,12 @@ impl App {
             Msg::Health(m) => self.health.update(m).map(Msg::Health),
             Msg::Storage(m) => self.storage.update(m).map(Msg::Storage),
             Msg::RefreshLog => Task::none(),
+            Msg::Tick => {
+                // frames come at the display rate; the spinner turns about eight times a second
+                self.frames = self.frames.wrapping_add(1);
+                self.tick = self.frames / 8;
+                Task::none()
+            }
             // Alt+1..4 switch the tabs (plain digits would land in the text boxes)
             Msg::Key(key, mods) => {
                 if mods.alt() {
@@ -301,8 +318,8 @@ impl App {
                     "Update all",
                     Msg::UpdateEverything
                 ),
-                self.proton.status_view().map(Msg::Proton),
-                self.apps.status_view::<Msg>(),
+                self.proton.status_view(self.tick).map(Msg::Proton),
+                self.apps.status_view::<Msg>(self.tick),
             ]
             .spacing(SPACING)
             .into(),
