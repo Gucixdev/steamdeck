@@ -1,6 +1,6 @@
-//! The one program: ProtonUp, Flatseal, System and Log as sections of a single window. Each section
-//! keeps its own sidebar layout (`ui::shell`); this file only switches between them.
-use crate::ui::{heading, nav_item, quiet_button, shell, theme, SMALL_SIZE, SPACING};
+//! The one program: Home, ProtonUp, Flatseal and Settings (System + Log) as four tabs of one window.
+//! Each tab has the same layout (`ui::shell`: a sidebar and a main area); this file only switches.
+use crate::ui::{accent_button, card, nav_item, page_title, quiet_button, shell, theme, ACCENT, PAD, SMALL_SIZE, SPACING, TEXT_SIZE};
 use crate::{log, proton_gui, seal_gui, system};
 use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
@@ -9,8 +9,11 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Section {
     #[default]
-    Proton,
-    Seal,
+    Home,
+    Games,
+    Get,
+    Installed,
+    Perms,
     System,
     Log,
 }
@@ -29,7 +32,7 @@ pub struct Start {
 
 #[derive(Debug, Clone)]
 enum Msg {
-    Section(Section),
+    Go(Section),
     Proton(proton_gui::Msg),
     Seal(seal_gui::Msg),
     System(system::Msg),
@@ -62,28 +65,32 @@ impl App {
         let (proton, pt) = proton_gui::App::new(dir, pinned, start.tab.as_deref());
         let (seal, st) = seal_gui::App::new(start.app.clone());
         let (system, yt) = system::State::new();
-        let app = App { section: start.section, proton, seal, system, seen: [None, None] };
+        let section = match (start.section, start.tab.as_deref()) {
+            (Section::Games, Some("available")) => Section::Get,
+            (Section::Games, Some("installed")) => Section::Installed,
+            (s, _) => s,
+        };
+        let app = App { section, proton, seal, system, seen: [None, None] };
         (app, Task::batch([pt.map(Msg::Proton), st.map(Msg::Seal), yt.map(Msg::System)]))
     }
 
     fn update(&mut self, m: Msg) -> Task<Msg> {
         let t = match m {
-            Msg::Section(s) => {
-                self.section = s;
-                Task::none()
-            }
-            Msg::Proton(m) => {
-                if matches!(m, proton_gui::Msg::Tab(_)) {
-                    self.section = Section::Proton;
+            Msg::Go(sec) => {
+                self.section = sec;
+                let tab = match sec {
+                    Section::Games => Some(proton_gui::Tab::Games),
+                    Section::Get => Some(proton_gui::Tab::Available),
+                    Section::Installed => Some(proton_gui::Tab::Installed),
+                    _ => None,
+                };
+                match tab {
+                    Some(t) => self.proton.update(proton_gui::Msg::Tab(t)).map(Msg::Proton),
+                    None => Task::none(),
                 }
-                self.proton.update(m).map(Msg::Proton)
             }
-            Msg::Seal(m) => {
-                if matches!(m, seal_gui::Msg::Select(_)) {
-                    self.section = Section::Seal;
-                }
-                self.seal.update(m).map(Msg::Seal)
-            }
+            Msg::Proton(m) => self.proton.update(m).map(Msg::Proton),
+            Msg::Seal(m) => self.seal.update(m).map(Msg::Seal),
             Msg::System(m) => self.system.update(m).map(Msg::System),
             Msg::RefreshLog => Task::none(),
         };
@@ -100,24 +107,75 @@ impl App {
         t
     }
 
-    /// One sidebar for everything: ProtonUp's pages, Flatseal's apps, System and Log.
+    /// Four tabs on top (Home, ProtonUp, Flatseal, Settings); the sidebar belongs to the tab.
     fn view(&self) -> Element<'_, Msg> {
-        let nav = |label: &'static str, s: Section| nav_item(label, self.section == s, Msg::Section(s));
-        let side = column![
-            heading("ProtonUp"),
-            self.proton.side(self.section == Section::Proton).map(Msg::Proton),
-            heading("Flatseal"),
-            container(self.seal.side(self.section == Section::Seal).map(Msg::Seal)).height(Fill),
-            nav("System", Section::System),
-            nav("Log", Section::Log),
+        let nav = |label: &'static str, s: Section| nav_item(label, self.section == s, Msg::Go(s));
+        let in_proton = matches!(self.section, Section::Games | Section::Get | Section::Installed);
+        let in_seal = self.section == Section::Perms;
+        let in_settings = matches!(self.section, Section::System | Section::Log);
+        let top_tab = |label: &'static str, goto: Section, on: bool| {
+            let b = button(text(label).size(TEXT_SIZE)).padding([8, 18]).on_press(Msg::Go(goto));
+            if on { b.style(accent_button()) } else { b.style(quiet_button()) }
+        };
+        let bar = iced::widget::row![
+            text("Steam Deck").size(TEXT_SIZE).color(ACCENT),
+            iced::widget::space::horizontal(),
+            top_tab("Home", Section::Home, self.section == Section::Home),
+            top_tab("ProtonUp", Section::Games, in_proton),
+            top_tab("Flatseal", Section::Perms, in_seal),
+            top_tab("Settings", Section::System, in_settings),
         ]
-        .spacing(8)
-        .height(Fill);
+        .spacing(SPACING)
+        .align_y(iced::Alignment::Center);
+
+        let side: Option<Element<Msg>> = if in_proton {
+            Some(
+                column![
+                    nav("Proton for my games", Section::Games),
+                    nav("Get a new Proton", Section::Get),
+                    nav("Installed", Section::Installed),
+                ]
+                .spacing(8)
+                .into(),
+            )
+        } else if in_seal {
+            Some(self.seal.side(true).map(Msg::Seal))
+        } else if in_settings {
+            Some(column![nav("System tweaks", Section::System), nav("Log", Section::Log)].spacing(8).into())
+        } else {
+            None
+        };
+
+        let proton_page = |title: &str, about: &str| -> Element<'_, Msg> {
+            column![page_title(title, about), self.proton.main().map(Msg::Proton)].spacing(SPACING).into()
+        };
         let main: Element<Msg> = match self.section {
-            Section::Proton => self.proton.main().map(Msg::Proton),
-            Section::Seal => self.seal.main().map(Msg::Seal),
-            Section::System => self.system.view().map(Msg::System),
+            Section::Home => column![
+                page_title("Steam Deck", "Pick what you want to do."),
+                card("Choose Proton for a game", "Windows games run through Proton. Pick which version each game uses.", "Open", Msg::Go(Section::Games)),
+                card("Get a newer Proton", "Download Proton-GE, CachyOS and others. A newer one often fixes a game that does not start.", "Open", Msg::Go(Section::Get)),
+                card("Flatseal: what apps may touch", "Flatpak apps: allow or block network, sound, files and more, per app or for all.", "Open", Msg::Go(Section::Perms)),
+                card("Settings: make the Deck steadier", "Memory guard, swap size, ssh. Changes only /etc and can be undone.", "Open", Msg::Go(Section::System)),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::Games => proton_page("Proton for my games", "Pick the Proton each game runs with. Close Steam first, or Steam undoes the change."),
+            Section::Get => proton_page("Get a new Proton", "Choose a category, then press Install on a version. It appears under Installed."),
+            Section::Installed => proton_page("Installed", "Everything installed in your Steam installs. Remove what you do not use."),
+            Section::Perms => column![
+                page_title("Flatseal", "Pick an app on the left, then choose for each item: default, allow (on) or block (off)."),
+                self.seal.main().map(Msg::Seal),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::System => column![
+                page_title("Settings: system tweaks", "Each button changes one thing in /etc and asks for your password."),
+                self.system.view().map(Msg::System),
+            ]
+            .spacing(SPACING)
+            .into(),
             Section::Log => column![
+                page_title("Settings: log", "What this program did and any errors. Send this file if something breaks."),
                 text(log::path().display().to_string()).size(SMALL_SIZE),
                 button(text("Refresh").size(SMALL_SIZE)).padding(8).on_press(Msg::RefreshLog).style(quiet_button()),
                 scrollable(text(log::tail(300)).size(SMALL_SIZE)).height(Fill).width(Fill),
@@ -125,6 +183,10 @@ impl App {
             .spacing(SPACING)
             .into(),
         };
-        shell(side.into(), main)
+        let body: Element<Msg> = match side {
+            Some(side) => shell(side, main),
+            None => container(main).padding(PAD).into(),
+        };
+        column![container(bar).padding(PAD), body].into()
     }
 }

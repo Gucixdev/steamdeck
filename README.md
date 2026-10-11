@@ -6,10 +6,10 @@ two bash files: `setup` (a wizard) and `run` (build, install, start).
 
 | | what |
 |---|---|
+| Home | four tiles saying what each tab is for |
 | ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
 | Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
-| System | OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`, run from the window |
-| Log | `~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did and every error and panic |
+| Settings | System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
 
 The window is [iced](https://iced.rs) drawn on the GPU with a software fallback, plain Wayland/X11, rustls
 for HTTPS, pure-Rust gzip and xz.

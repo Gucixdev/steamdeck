@@ -136,6 +136,35 @@ pub fn nav_item<'a, M: Clone + 'a>(
     }
 }
 
+/// The top of a page: what this is, in one plain sentence.
+pub fn page_title<'a, M: 'a>(title: &str, about: &str) -> Element<'a, M> {
+    column![text(title.to_string()).size(TITLE_SIZE).color(ACCENT), text(about.to_string()).size(SMALL_SIZE).color(DIM)]
+        .spacing(4)
+        .into()
+}
+
+/// A big tile for the home page: a title, a sentence, and one action.
+pub fn card<'a, M: Clone + 'a>(title: &str, about: &str, action: &'static str, msg: M) -> Element<'a, M> {
+    container(
+        row![
+            column![text(title.to_string()).size(TEXT_SIZE), text(about.to_string()).size(SMALL_SIZE).color(DIM)]
+                .spacing(4)
+                .width(Fill),
+            btn(text(action).size(TEXT_SIZE)).padding([10, 20]).on_press(msg).style(primary_button()),
+        ]
+        .spacing(SPACING)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(PAD)
+    .width(Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(color!(0x2a475e))),
+        border: iced::Border { radius: 4.0.into(), ..Default::default() },
+        ..Default::default()
+    })
+    .into()
+}
+
 /// A section title in the main area.
 pub fn heading<'a, M: 'a>(s: impl Into<String>) -> Element<'a, M> {
     text(s.into()).size(TEXT_SIZE).color(ACCENT).into()

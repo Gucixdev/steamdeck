@@ -49,7 +49,7 @@ pub fn run(args: Vec<String>) -> ExitCode {
             say!("{HELP}");
             ExitCode::SUCCESS
         }
-        "gui" => crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Seal, dir: None, tab: None, app: a(1).map(str::to_string) })
+        "gui" => crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Perms, dir: None, tab: None, app: a(1).map(str::to_string) })
             .map(|_| ExitCode::SUCCESS)
             .unwrap_or_else(fail),
         "list" => match flatpak::list_apps() {

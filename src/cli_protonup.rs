@@ -111,7 +111,7 @@ pub fn run(mut args: Vec<String>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        "gui" => match crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Proton, dir: dir.is_some().then(|| dir_path.clone()), tab: args.get(1).cloned(), app: None }) {
+        "gui" => match crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Games, dir: dir.is_some().then(|| dir_path.clone()), tab: args.get(1).cloned(), app: None }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(e),
         },
