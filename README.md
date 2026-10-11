@@ -6,7 +6,7 @@ two bash files: `setup` (a wizard) and `run` (build, install, start).
 
 | | what |
 |---|---|
-| Home | four tiles saying what each tab is for |
+| Home | tiles saying what each tab is for, Update Protons, and a warning when two Steam installs are found |
 | ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
 | Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
 | Settings | System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
@@ -74,9 +74,10 @@ protonup installed | remove NAME | path
 | `northstar` | NorthstarProton, for the Titanfall 2 Northstar client |
 | `luxtorpeda` | runs the native Linux engine of a game instead of its Windows build |
 
-In the window: **Installed** (remove), **Available** (a category dropdown, then that category's
-releases) and **Games** (a dropdown per game, like ProtonUp-Qt: pick the Proton for each game, or one for
-all games). The per-game choice is written to Steam's `config/config.vdf` (`CompatToolMapping`); Steam
+In the window, two pages: **Download Proton** (a category dropdown, then a table of that category's
+releases with Install, and remove for the installed ones; **Update Protons** on Home installs the newest
+of every kind you have) and **Proton for my games** (a table with a dropdown per game, like
+ProtonUp-Qt, across every Steam install, or one choice for all games). The per-game choice is written to Steam's `config/config.vdf` (`CompatToolMapping`); Steam
 rewrites that file when it exits, so protonup refuses to change it while Steam is running and keeps a
 `config.vdf.steamdeck-bak` of the previous file.
 
