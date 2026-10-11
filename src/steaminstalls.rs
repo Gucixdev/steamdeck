@@ -320,11 +320,36 @@ fn delete_folder(path: &std::path::Path) -> String {
             real.display()
         );
     }
-    if let Err(e) = std::fs::remove_dir_all(&real) {
-        return format!("could not delete {}: {e}", real.display());
+    // empty it entry by entry: the folder itself may sit in a directory we do not own (/data), where
+    // removing the last entry is not allowed even though everything inside it was ours to delete
+    let mut failed = Vec::new();
+    match std::fs::read_dir(&real) {
+        Ok(rd) => {
+            for e in rd.flatten() {
+                let p = e.path();
+                let r = if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    std::fs::remove_dir_all(&p)
+                } else {
+                    std::fs::remove_file(&p)
+                };
+                if let Err(err) = r {
+                    failed.push(format!("{}: {err}", p.display()));
+                }
+            }
+        }
+        Err(e) => return format!("could not read {}: {e}", real.display()),
     }
+    if !failed.is_empty() {
+        return format!(
+            "could not delete everything in {}:\n{}",
+            real.display(),
+            failed.join("\n")
+        );
+    }
+    let removed_dir = std::fs::remove_dir(&real).is_ok();
     // the usual ~/.local/share/Steam is a symlink to the real folder: drop it if it now dangles
-    if path != real
+    if removed_dir
+        && path != real
         && std::fs::symlink_metadata(path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
@@ -332,7 +357,14 @@ fn delete_folder(path: &std::path::Path) -> String {
     {
         let _ = std::fs::remove_file(path);
     }
-    format!("deleted {}", real.display())
+    if removed_dir {
+        format!("deleted {}", real.display())
+    } else {
+        format!(
+            "emptied {} (the folder itself stays: its parent directory is not yours)",
+            real.display()
+        )
+    }
 }
 
 /// Runs the removal; root through pkexec where needed. Returns what to show.
@@ -408,6 +440,19 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         assert!(delete_folder(&other).contains("refusing"));
         assert!(other.exists());
+        // a parent we may not change: the contents go, the folder stays, and that is reported
+        let guard = base.join("data");
+        let mut perm = std::fs::metadata(&guard).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(real.join("steamapps/x"), b"1").unwrap();
+        perm.set_mode(0o555);
+        std::fs::set_permissions(&guard, perm.clone()).unwrap();
+        let msg = delete_folder(&link);
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&guard, perm).unwrap();
+        assert!(msg.starts_with("emptied"), "{msg}");
+        assert!(real.exists() && std::fs::read_dir(&real).unwrap().count() == 0);
+        std::fs::create_dir_all(real.join("steamapps")).unwrap();
         assert!(delete_folder(&link).starts_with("deleted"));
         assert!(!real.exists());
         assert!(

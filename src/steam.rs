@@ -29,7 +29,18 @@ pub fn steam_roots(home: &Path) -> Vec<PathBuf> {
 
 /// `<root>/compatibilitytools.d` for each Steam root; the directory itself may not exist yet.
 pub fn tool_dirs(home: &Path) -> Vec<PathBuf> {
-    steam_roots(home)
+    let roots = steam_roots(home);
+    // an install is real when it has games or settings; a leftover folder is only used if nothing else is
+    let real: Vec<&PathBuf> = roots
+        .iter()
+        .filter(|r| r.join("steamapps").is_dir() || r.join("config/config.vdf").is_file())
+        .collect();
+    let chosen: Vec<&PathBuf> = if real.is_empty() {
+        roots.iter().collect()
+    } else {
+        real
+    };
+    chosen
         .into_iter()
         .map(|r| r.join("compatibilitytools.d"))
         .collect()
