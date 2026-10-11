@@ -5,29 +5,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/setup | bash
 #                            the same from GitHub: installs ProtonUp and Flatseal from the latest release
 #
-# What it can do:
-#   programs   the steamdeck program (ProtonUp + Flatseal + System in one window) into ~/.local/bin, with
-#              the protonup and flatseal command names, a menu entry, optional weekly Proton-GE update
-#   system     OOM guard (systemd-oomd), memory sysctl for zram, swap file size, ssh (asks sudo, /etc only)
-#   firefox    telemetry and sponsored content off, WebRTC leak guard, uBlock Origin in the default profile
-#
 # Nothing changes until you confirm the summary. Files written under /etc start with a
 # "managed by steamdeck/setup" line, so undo removes exactly those and nothing else.
-#
-# Options for scripts and tests (the wizard needs none of them):
-#   --programs             only the programs step, no questions
-#   --system ACTION...     only the system step: oom, sysctl, swapfile SIZE, ssh, all, status, undo
-#   --firefox              only the Firefox step, no questions (FIREFOX_PROFILE=DIR picks the profile)
-#   --prefix DIR           install under DIR (default ~/.local)
-#   --version TAG          a release tag instead of the latest
-#   --from DIR             binaries + SHA256SUMS from DIR instead of downloading (checksums verified)
-#   --local DIR            your own build: DIR/protonup and DIR/flatseal, copied if they changed
-#   --timer                weekly `protonup install latest` systemd user timer
-#   --no-desktop           no menu entries or icons
-#   --uninstall            remove the programs
-#   --swappiness N         for the sysctl action (default 100)
-#   --root DIR             write the /etc files under DIR and only print the system commands
-#   --dry-run              print what would happen, change nothing
+# `./setup --help` lists every option.
 set -euo pipefail
 
 ARGS=("$@")
@@ -58,7 +38,39 @@ LOGFILE=${XDG_STATE_HOME:-$HOME/.local/state}/steamdeck/steamdeck.log
 log() { mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null && printf '%s setup: %s\n' "$(date +%s)" "$*" >>"$LOGFILE" 2>/dev/null || true; }
 say() { printf '%s\n' "$*"; log "$*"; }
 die() { printf 'setup: %s\n' "$*" >&2; log "ERROR $*"; exit 1; }
-usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() { # a heredoc, so it also works when the script is piped into bash (no file to read)
+	cat <<'USAGE'
+setup - a wizard for a Steam Deck: asks what you want, shows the list, then does it.
+
+  ./setup                  the wizard (set up, show what is set up, remove it again)
+  curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/setup | bash
+                           the same from GitHub: installs the program from the latest release
+
+What it can do:
+  programs   the steamdeck program (ProtonUp + Flatseal + System in one window) into ~/.local/bin, with
+             the protonup and flatseal command names, a menu entry, optional weekly Proton-GE update
+  system     OOM guard (systemd-oomd), memory sysctl for zram, swap file size, ssh (asks sudo, /etc only)
+  firefox    telemetry and sponsored content off, WebRTC leak guard, uBlock Origin in the default profile
+
+Nothing changes until you confirm the summary. Files written under /etc start with a
+"managed by steamdeck/setup" line, so undo removes exactly those and nothing else.
+
+Options for scripts and tests (the wizard needs none of them):
+  --programs             only the programs step, no questions
+  --system ACTION...     only the system step: oom, sysctl, swapfile SIZE, ssh, all, status, undo
+  --firefox              only the Firefox step, no questions (FIREFOX_PROFILE=DIR picks the profile)
+  --prefix DIR           install under DIR (default ~/.local)
+  --version TAG          a release tag instead of the latest
+  --from DIR             binaries + SHA256SUMS from DIR instead of downloading (checksums verified)
+  --local DIR            your own build: DIR/protonup and DIR/flatseal, copied if they changed
+  --timer                weekly `protonup update` systemd user timer
+  --no-desktop           no menu entries or icons
+  --uninstall            remove the programs
+  --swappiness N         for the sysctl action (default 100)
+  --root DIR             write the /etc files under DIR and only print the system commands
+  --dry-run              print what would happen, change nothing
+USAGE
+}
 
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -82,6 +94,10 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+if [ "$MODE" != system ] && [ "${#ACTIONS[@]}" -gt 0 ]; then
+	die "unexpected argument '${ACTIONS[0]}' (see --help)"
+fi
+
 # ============================== programs ================================================
 
 ALL=(steamdeck)
@@ -97,6 +113,18 @@ title() { echo "Steam Deck"; }
 comment() { echo "ProtonUp, Flatseal and system setup"; }
 icon_color() { echo "#1a9fff"; }
 icon_glyph() { echo "D"; }
+
+# a desktop entry's Exec needs quotes when the path has a space (and escapes for quote, $, ` and \)
+desktop_exec() {
+	case $1 in
+		*[[:space:]\"\$\`\\]*)
+			local q=${1//\\/\\\\}
+			q=${q//\"/\\\"}
+			printf '"%s"' "$q"
+			;;
+		*) printf '%s' "$1" ;;
+	esac
+}
 
 prun() { if [ "$DRY" = 1 ]; then printf '+ %s\n' "$*"; else "$@"; fi; }
 
@@ -226,7 +254,7 @@ SVG
 Type=Application
 Name=$(title "$n")
 Comment=$(comment "$n")
-Exec=$BIN/$n
+Exec=$(desktop_exec "$BIN/$n")
 Icon=$n
 Terminal=false
 Categories=Utility;Game;

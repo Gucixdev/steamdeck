@@ -149,3 +149,71 @@ teardown() { rm -rf "$T"; }
 	grep -q '^// my own$' "$P/user.js"
 	grep -q 'user_pref("my.own", 1);' "$P/user.js"
 }
+
+@test "--help works when the script is piped into bash, as in the curl one-liner" {
+	run bash -c "bash -s -- --help < '$ROOT/setup'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"--prefix DIR"* ]]
+}
+
+@test "the timer runs a command the program really has" {
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p" --timer
+	[ "$status" -eq 0 ]
+	unit=$T/home/.config/systemd/user/protonup-update.service
+	exec_line=$(grep '^ExecStart=' "$unit")
+	[ "$exec_line" = "ExecStart=$T/p/bin/steamdeck protonup update" ]
+	grep -q 'protonup update' "$ROOT/src/cli_protonup.rs"
+	grep -q '^OnCalendar=weekly' "$T/home/.config/systemd/user/protonup-update.timer"
+}
+
+@test "the header does not promise a command the timer does not run" {
+	! grep -q 'protonup install latest' "$ROOT/setup"
+}
+
+@test "a prefix with a space gives a menu entry that still starts the program" {
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/my prefix"
+	[ "$status" -eq 0 ]
+	[ -x "$T/my prefix/bin/steamdeck" ]
+	grep -q "^Exec=\"$T/my prefix/bin/steamdeck\"$" "$T/my prefix/share/applications/steamdeck.desktop"
+}
+
+@test "installing over a running program works and leaves no temporary file" {
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	cp "$T/p/bin/steamdeck" "$T/running"
+	printf '#!/bin/sh\nsleep 5\n' > "$DIST/steamdeck-x86_64-linux"
+	(cd "$DIST" && sha256sum -- *-x86_64-linux > SHA256SUMS)
+	"$T/p/bin/steamdeck" & pid=$!
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	kill "$pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[ -z "$(ls "$T/p/bin" | grep -F '.new.')" ]
+}
+
+@test "a missing value after an option is an error, not a silent default" {
+	for o in --prefix --from --version --local --root --swappiness; do
+		run "$ROOT/setup" --programs "$o"
+		[ "$status" -ne 0 ]
+	done
+}
+
+@test "an unknown word in programs mode is reported" {
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p" nonsense
+	[ "$status" -ne 0 ]
+	[ ! -e "$T/p/bin/steamdeck" ]
+}
+
+@test "a checksum file with Windows line endings is refused clearly, not installed" {
+	sed -i 's/$/\r/' "$DIST/SHA256SUMS"
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	[ ! -e "$T/p/bin/steamdeck" ] || [ "$status" -eq 0 ]
+}
+
+@test "uninstall twice and uninstall with nothing installed are harmless" {
+	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
+	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
+	[ "$status" -eq 0 ]
+}
