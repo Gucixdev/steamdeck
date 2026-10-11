@@ -27,7 +27,9 @@ impl KeyFile {
                 if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
                     kf.groups[g].1.push(Line::Other(line.to_string()));
                 } else if let Some((k, v)) = t.split_once('=') {
-                    kf.groups[g].1.push(Line::Pair(k.trim().to_string(), v.trim().to_string()));
+                    kf.groups[g]
+                        .1
+                        .push(Line::Pair(k.trim().to_string(), v.trim().to_string()));
                 } else {
                     kf.groups[g].1.push(Line::Other(line.to_string()));
                 }
@@ -40,7 +42,10 @@ impl KeyFile {
         let mut out = String::new();
         for (name, lines) in &self.groups {
             // a group left empty by an edit is not written at all
-            if lines.iter().all(|l| matches!(l, Line::Other(s) if s.trim().is_empty())) {
+            if lines
+                .iter()
+                .all(|l| matches!(l, Line::Other(s) if s.trim().is_empty()))
+            {
                 continue;
             }
             if !out.is_empty() {
@@ -90,7 +95,9 @@ impl KeyFile {
                 }
             }
         }
-        self.groups[gi].1.push(Line::Pair(key.to_string(), value.to_string()));
+        self.groups[gi]
+            .1
+            .push(Line::Pair(key.to_string(), value.to_string()));
     }
 
     pub fn remove(&mut self, group: &str, key: &str) {
@@ -117,7 +124,13 @@ impl KeyFile {
     /// A `;`-separated list value: `a;b;c;` -> [a, b, c]
     pub fn list(&self, group: &str, key: &str) -> Vec<String> {
         self.get(group, key)
-            .map(|v| v.split(';').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
+            .map(|v| {
+                v.split(';')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -157,9 +170,15 @@ org.freedesktop.Notifications=talk
     fn parses_lists_and_pairs() {
         let k = KeyFile::parse(SAMPLE);
         assert_eq!(k.list("Context", "shared"), ["network", "ipc"]);
-        assert_eq!(k.list("Context", "filesystems"), ["xdg-download", "~/Games:rw"]);
+        assert_eq!(
+            k.list("Context", "filesystems"),
+            ["xdg-download", "~/Games:rw"]
+        );
         assert_eq!(k.get("Application", "name"), Some("org.example.App"));
-        assert_eq!(k.pairs("Session Bus Policy"), [("org.freedesktop.Notifications".into(), "talk".into())]);
+        assert_eq!(
+            k.pairs("Session Bus Policy"),
+            [("org.freedesktop.Notifications".into(), "talk".into())]
+        );
         assert!(k.list("Context", "missing").is_empty());
     }
 
@@ -182,6 +201,9 @@ org.freedesktop.Notifications=talk
         assert!(t.contains("sockets=x11;\n"));
         assert!(!t.contains("shared="));
         assert!(t.contains("[Environment]\nFOO=bar"));
-        assert!(!t.contains("Session Bus Policy"), "an emptied group disappears: {t}");
+        assert!(
+            !t.contains("Session Bus Policy"),
+            "an emptied group disappears: {t}"
+        );
     }
 }

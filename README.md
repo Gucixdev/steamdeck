@@ -48,6 +48,7 @@ protonup sources               the tools it can fetch
 protonup list [-n N | --all]   releases of a source, installed ones marked
 protonup install [TAG]         one release, or the newest
 protonup install --all [--yes] every release of the source that is not installed yet
+-j N                           downloads at once (default 3, at most 8)
 protonup installed | remove NAME | path
 --source ID                    ge (default), cachyos, cachyos-v3, rtsp, sarek, northstar, luxtorpeda
 ```
@@ -67,7 +68,9 @@ command line say so. Nothing appears under its final name unless the checksum ma
 unpacked completely. Install directories: the native Steam
 (`~/.local/share/Steam/compatibilitytools.d`) and the Flatpak Steam, chosen in the window or with
 `--dir`. **Install all** shows the number and size first; a full Proton-GE history is tens of
-gigabytes, mind the Deck's SSD. After an install restart Steam and pick the tool under a game's
+gigabytes, mind the Deck's SSD. The queue works like `dspq` from the bash repo: a FIFO list, `-j N`
+downloads at once, each into a `.part` file that becomes the real file only when it is complete, and an
+interrupted download continues from the bytes already on disk (HTTP `Range`) when you run it again. After an install restart Steam and pick the tool under a game's
 Properties, Compatibility.
 
 ## flatseal
@@ -76,14 +79,21 @@ Properties, Compatibility.
 flatseal                          open the window
 flatseal list                     installed Flatpak apps
 flatseal show APP                 effective permissions; * marks the app's own overrides
-flatseal allow|deny APP KEY NAME  KEY: shared, sockets, devices, features, filesystems
+flatseal allow|deny|default APP KEY NAME   KEY: shared, sockets, devices, features, filesystems
+flatseal portals APP              portal permissions and files the app was granted
+flatseal portal APP NAME yes|no|default    background, notification, camera, microphone, speakers
+flatseal revoke APP TABLE ID      take back one stored entry
 flatseal fs-add APP PATH[:ro|:rw|:create]   |  fs-remove APP PATH
 flatseal reset APP                drop the app's overrides
 ```
 
 `APP` is an application id or `global` (applies to every app). It edits the files `flatpak override
---user` writes, under `$FLATPAK_USER_DIR/overrides`, so the two can be mixed. A toggle writes an
-override only when it differs from what the app's metadata and the global overrides already give.
+--user` writes, under `$FLATPAK_USER_DIR/overrides`, so the two can be mixed. Every permission has
+three states: **default** (no entry, inherit), **on** (`name`) and **off** (`!name`). On and off are
+always written, so you can switch networking off for all apps explicitly instead of just not enabling it;
+default removes the entry again. **Portals** (background, notifications, camera, microphone, speakers)
+and the files an app was given through the file chooser are read and changed through `flatpak
+permission-*`, the same permission store the desktop portals use.
 Network, sockets, devices, features, filesystems (the standard folders plus your own paths), session
 and system bus policies and environment variables are covered.
 

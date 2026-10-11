@@ -17,7 +17,10 @@ pub fn steam_roots(home: &Path) -> Vec<PathBuf> {
         }
         // ~/.steam/root and ~/.steam/steam are symlinks to the real root: keep one copy of each real dir
         let real = std::fs::canonicalize(&c).unwrap_or(c.clone());
-        if !out.iter().any(|o| std::fs::canonicalize(o).unwrap_or(o.clone()) == real) {
+        if !out
+            .iter()
+            .any(|o| std::fs::canonicalize(o).unwrap_or(o.clone()) == real)
+        {
             out.push(c);
         }
     }
@@ -26,7 +29,10 @@ pub fn steam_roots(home: &Path) -> Vec<PathBuf> {
 
 /// `<root>/compatibilitytools.d` for each Steam root; the directory itself may not exist yet.
 pub fn tool_dirs(home: &Path) -> Vec<PathBuf> {
-    steam_roots(home).into_iter().map(|r| r.join("compatibilitytools.d")).collect()
+    steam_roots(home)
+        .into_iter()
+        .map(|r| r.join("compatibilitytools.d"))
+        .collect()
 }
 
 /// The directory to install into: the one the user asked for, else the first Steam found, else the
@@ -55,7 +61,10 @@ mod tests {
     #[test]
     fn no_steam_gives_the_native_default() {
         let h = tmp("none");
-        assert_eq!(default_tool_dir(&h, None), h.join(".local/share/Steam/compatibilitytools.d"));
+        assert_eq!(
+            default_tool_dir(&h, None),
+            h.join(".local/share/Steam/compatibilitytools.d")
+        );
     }
 
     #[test]
@@ -67,7 +76,10 @@ mod tests {
         std::os::unix::fs::symlink(h.join(".local/share/Steam"), h.join(".steam/steam")).unwrap();
         let roots = steam_roots(&h);
         assert_eq!(roots.len(), 1, "{roots:?}");
-        assert_eq!(default_tool_dir(&h, None), h.join(".local/share/Steam/compatibilitytools.d"));
+        assert_eq!(
+            default_tool_dir(&h, None),
+            h.join(".local/share/Steam/compatibilitytools.d")
+        );
     }
 
     #[test]

@@ -7,5 +7,5 @@ pub mod sources;
 pub mod steam;
 
 pub use github::{Asset, Release};
-pub use sources::Source;
 pub use install::{Installed, Progress};
+pub use sources::Source;

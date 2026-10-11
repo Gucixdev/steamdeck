@@ -27,7 +27,11 @@ impl Release {
     /// The archive of this release for `src`: the asset with the source's suffix, minus excluded ones.
     pub fn archive(&self, src: &Source) -> Option<&Asset> {
         self.assets.iter().find(|a| {
-            a.name.ends_with(src.suffix) && !src.exclude.iter().any(|x| a.name.to_lowercase().contains(x))
+            a.name.ends_with(src.suffix)
+                && !src
+                    .exclude
+                    .iter()
+                    .any(|x| a.name.to_lowercase().contains(x))
         })
     }
 
@@ -45,7 +49,9 @@ impl Release {
             format!("{stem}.sha512sum"),
             format!("{stem}.sha512"),
         ];
-        names.iter().find_map(|n| self.assets.iter().find(|a| &a.name == n))
+        names
+            .iter()
+            .find_map(|n| self.assets.iter().find(|a| &a.name == n))
     }
 
     /// `2025-02-14T10:11:12Z` -> `2025-02-14`
@@ -87,7 +93,9 @@ pub fn agent() -> ureq::Agent {
 }
 
 fn get(url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
-    let mut req = agent().get(url).header("Accept", "application/vnd.github+json");
+    let mut req = agent()
+        .get(url)
+        .header("Accept", "application/vnd.github+json");
     if let Ok(tok) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN")) {
         req = req.header("Authorization", &format!("Bearer {tok}"));
     }
@@ -97,7 +105,11 @@ fn get(url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
 /// One page (1-based) of a source's releases, as GitHub returns it: pre-releases and releases with no
 /// matching archive are dropped, so a page can come back shorter than `per_page`.
 /// The second value is whether GitHub had a full page, i.e. whether another page may exist.
-pub fn releases_page(src: &Source, page: usize, per_page: usize) -> Result<(Vec<Release>, bool), String> {
+pub fn releases_page(
+    src: &Source,
+    page: usize,
+    per_page: usize,
+) -> Result<(Vec<Release>, bool), String> {
     let per_page = per_page.clamp(1, 100);
     let url = format!(
         "{}/repos/{}/releases?per_page={}&page={}",
@@ -107,10 +119,17 @@ pub fn releases_page(src: &Source, page: usize, per_page: usize) -> Result<(Vec<
         page.max(1)
     );
     let mut resp = get(&url)?;
-    let body = resp.body_mut().read_to_string().map_err(|e| e.to_string())?;
-    let all: Vec<Release> = serde_json::from_str(&body).map_err(|e| format!("bad release list: {e}"))?;
+    let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    let all: Vec<Release> =
+        serde_json::from_str(&body).map_err(|e| format!("bad release list: {e}"))?;
     let full = all.len() >= per_page;
-    let keep = all.into_iter().filter(|r| !r.prerelease && r.archive(src).is_some()).collect();
+    let keep = all
+        .into_iter()
+        .filter(|r| !r.prerelease && r.archive(src).is_some())
+        .collect();
     Ok((keep, full))
 }
 
@@ -141,7 +160,10 @@ pub fn checksum_for(text: &str, file: &str) -> Option<String> {
         if !valid(hash) {
             continue;
         }
-        entries.push((hash.to_ascii_lowercase(), it.next().map(|n| n.trim_start_matches('*').to_string())));
+        entries.push((
+            hash.to_ascii_lowercase(),
+            it.next().map(|n| n.trim_start_matches('*').to_string()),
+        ));
     }
     if let Some((h, _)) = entries.iter().find(|(_, n)| n.as_deref() == Some(file)) {
         return Some(h.clone());
@@ -158,7 +180,11 @@ mod tests {
     use crate::sources::{find, SOURCES};
 
     fn asset(n: &str) -> Asset {
-        Asset { name: n.into(), browser_download_url: format!("u/{n}"), size: 1 }
+        Asset {
+            name: n.into(),
+            browser_download_url: format!("u/{n}"),
+            size: 1,
+        }
     }
 
     fn ge_release() -> Release {
@@ -181,7 +207,10 @@ mod tests {
         let r = ge_release();
         let a = r.archive(src).unwrap();
         assert_eq!(a.name, "GE-Proton11-7-x86_64.tar.gz");
-        assert_eq!(r.checksum(a).unwrap().name, "GE-Proton11-7-x86_64.sha512sum");
+        assert_eq!(
+            r.checksum(a).unwrap().name,
+            "GE-Proton11-7-x86_64.sha512sum"
+        );
         assert_eq!(r.dir_name(src), "GE-Proton11-7");
         assert_eq!(r.date(), "2026-10-05");
     }
@@ -203,9 +232,16 @@ mod tests {
         let g = find("cachyos").unwrap();
         let v3 = find("cachyos-v3").unwrap();
         assert!(r.archive(g).unwrap().name.ends_with("-slr-x86_64.tar.xz"));
-        assert!(r.archive(v3).unwrap().name.ends_with("-slr-x86_64_v3.tar.xz"));
+        assert!(r
+            .archive(v3)
+            .unwrap()
+            .name
+            .ends_with("-slr-x86_64_v3.tar.xz"));
         assert_eq!(r.dir_name(g), "proton-cachyos-11.0-20261005-slr-x86_64");
-        assert_eq!(r.checksum(r.archive(v3).unwrap()).unwrap().name, "proton-cachyos-11.0-20261005-slr-x86_64_v3.sha512sum");
+        assert_eq!(
+            r.checksum(r.archive(v3).unwrap()).unwrap().name,
+            "proton-cachyos-11.0-20261005-slr-x86_64_v3.sha512sum"
+        );
     }
 
     #[test]
@@ -214,10 +250,16 @@ mod tests {
             tag_name: "v76.3.0".into(),
             published_at: String::new(),
             prerelease: false,
-            assets: vec![asset("luxtorpeda-v76.3.0.tar.xz"), asset("luxtorpeda-v76.3.0.tar.xz.sha512")],
+            assets: vec![
+                asset("luxtorpeda-v76.3.0.tar.xz"),
+                asset("luxtorpeda-v76.3.0.tar.xz.sha512"),
+            ],
         };
         let s = find("luxtorpeda").unwrap();
-        assert_eq!(r.checksum(r.archive(s).unwrap()).unwrap().name, "luxtorpeda-v76.3.0.tar.xz.sha512");
+        assert_eq!(
+            r.checksum(r.archive(s).unwrap()).unwrap().name,
+            "luxtorpeda-v76.3.0.tar.xz.sha512"
+        );
         assert_eq!(r.dir_name(s), "luxtorpeda");
     }
 
@@ -227,20 +269,42 @@ mod tests {
             tag_name: "Proton-Sarek10-29".into(),
             published_at: String::new(),
             prerelease: false,
-            assets: vec![asset("Proton-Sarek10-29-async.tar.gz"), asset("Proton-Sarek10-29.tar.gz")],
+            assets: vec![
+                asset("Proton-Sarek10-29-async.tar.gz"),
+                asset("Proton-Sarek10-29.tar.gz"),
+            ],
         };
-        assert_eq!(r.archive(find("sarek").unwrap()).unwrap().name, "Proton-Sarek10-29.tar.gz");
+        assert_eq!(
+            r.archive(find("sarek").unwrap()).unwrap().name,
+            "Proton-Sarek10-29.tar.gz"
+        );
     }
 
     #[test]
     fn parses_checksum_lines() {
         let h = "a".repeat(128);
-        let text = format!("{h}  GE-Proton10-1.tar.gz\n{}  other.tar.gz\n", "b".repeat(128));
+        let text = format!(
+            "{h}  GE-Proton10-1.tar.gz\n{}  other.tar.gz\n",
+            "b".repeat(128)
+        );
         assert_eq!(checksum_for(&text, "GE-Proton10-1.tar.gz").unwrap(), h);
-        assert_eq!(checksum_for(&text, "other.tar.gz").unwrap(), "b".repeat(128));
-        assert!(checksum_for(&text, "missing.tar.gz").is_none(), "two entries, none for this file");
-        assert!(checksum_for("zz  x.tar.gz", "x.tar.gz").is_none(), "short or non-hex hash is refused");
-        assert_eq!(checksum_for(&format!("{h}  renamed.tar.xz\n"), "real.tar.xz").unwrap(), h, "single entry is trusted");
+        assert_eq!(
+            checksum_for(&text, "other.tar.gz").unwrap(),
+            "b".repeat(128)
+        );
+        assert!(
+            checksum_for(&text, "missing.tar.gz").is_none(),
+            "two entries, none for this file"
+        );
+        assert!(
+            checksum_for("zz  x.tar.gz", "x.tar.gz").is_none(),
+            "short or non-hex hash is refused"
+        );
+        assert_eq!(
+            checksum_for(&format!("{h}  renamed.tar.xz\n"), "real.tar.xz").unwrap(),
+            h,
+            "single entry is trusted"
+        );
     }
 
     #[test]

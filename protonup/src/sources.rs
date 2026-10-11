@@ -115,7 +115,11 @@ mod tests {
     fn ids_are_unique_and_findable() {
         for (i, s) in SOURCES.iter().enumerate() {
             assert_eq!(find(s.id).unwrap().name, s.name);
-            assert!(SOURCES[i + 1..].iter().all(|o| o.id != s.id), "duplicate id {}", s.id);
+            assert!(
+                SOURCES[i + 1..].iter().all(|o| o.id != s.id),
+                "duplicate id {}",
+                s.id
+            );
             assert!(s.repo.contains('/'));
         }
         assert!(find("nope").is_none());

@@ -18,13 +18,19 @@ pub fn user_dir() -> PathBuf {
             return PathBuf::from(d);
         }
     }
-    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("flatpak")
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("flatpak")
 }
 
 pub const GLOBAL: &str = "global";
 
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() < 256 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    !id.is_empty()
+        && id.len() < 256
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 pub fn override_path(id: &str) -> Result<PathBuf, String> {
@@ -39,7 +45,11 @@ pub fn override_path(id: &str) -> Result<PathBuf, String> {
 }
 
 pub fn load_override(id: &str) -> KeyFile {
-    override_path(id).ok().and_then(|p| fs::read_to_string(p).ok()).map(|t| KeyFile::parse(&t)).unwrap_or_default()
+    override_path(id)
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .map(|t| KeyFile::parse(&t))
+        .unwrap_or_default()
 }
 
 /// Write the override (atomically), or delete the file when nothing is left in it.
@@ -88,28 +98,65 @@ pub fn list_apps() -> Result<Vec<App>, String> {
         .output()
         .map_err(|e| format!("flatpak: {e}"))?;
     if !out.status.success() {
-        return Err(format!("flatpak list failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!(
+            "flatpak list failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(parse_list(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// The app's metadata, read straight from the installation (spawning `flatpak info` costs 100+ ms
+/// each time); `flatpak info` stays as the fallback for unusual installations. Cached per run.
 pub fn metadata(id: &str) -> KeyFile {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, KeyFile>>> = OnceLock::new();
     if !valid_id(id) {
         return KeyFile::default();
     }
-    Command::new("flatpak")
-        .args(["info", "--show-metadata", id])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| KeyFile::parse(&String::from_utf8_lossy(&o.stdout)))
-        .unwrap_or_default()
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(k) = cache.lock().ok().and_then(|c| c.get(id).cloned()) {
+        return k;
+    }
+    let mut dirs = vec![user_dir()];
+    if let Ok(d) = std::env::var("FLATPAK_SYSTEM_DIR") {
+        dirs.push(PathBuf::from(d));
+    }
+    dirs.push(PathBuf::from("/var/lib/flatpak"));
+    let kf = dirs
+        .iter()
+        .find_map(|d| {
+            std::fs::read_to_string(d.join("app").join(id).join("current/active/metadata")).ok()
+        })
+        .map(|t| KeyFile::parse(&t))
+        .unwrap_or_else(|| {
+            Command::new("flatpak")
+                .args(["info", "--show-metadata", id])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| KeyFile::parse(&String::from_utf8_lossy(&o.stdout)))
+                .unwrap_or_default()
+        });
+    if let Ok(mut c) = cache.lock() {
+        c.insert(id.to_string(), kf.clone());
+    }
+    kf
 }
 
 pub fn load_layers(id: &str) -> crate::perms::Layers {
     crate::perms::Layers {
-        meta: if id == GLOBAL { KeyFile::default() } else { metadata(id) },
-        global: if id == GLOBAL { KeyFile::default() } else { load_override(GLOBAL) },
+        meta: if id == GLOBAL {
+            KeyFile::default()
+        } else {
+            metadata(id)
+        },
+        global: if id == GLOBAL {
+            KeyFile::default()
+        } else {
+            load_override(GLOBAL)
+        },
         app: load_override(id),
         is_global: id == GLOBAL,
     }
@@ -139,11 +186,20 @@ mod tests {
         save_override("org.example.App", &kf).unwrap();
         let p = dir.join("overrides/org.example.App");
         assert!(p.is_file());
-        assert_eq!(fs::read_to_string(&p).unwrap(), "[Context]\nsockets=!x11;wayland;\n");
-        assert_eq!(load_override("org.example.App").list("Context", "sockets"), ["!x11", "wayland"]);
+        assert_eq!(
+            fs::read_to_string(&p).unwrap(),
+            "[Context]\nsockets=!x11;wayland;\n"
+        );
+        assert_eq!(
+            load_override("org.example.App").list("Context", "sockets"),
+            ["!x11", "wayland"]
+        );
         save_override("org.example.App", &KeyFile::default()).unwrap();
         assert!(!p.exists());
-        assert!(save_override("../evil", &kf).is_err(), "ids that are paths are refused");
+        assert!(
+            save_override("../evil", &kf).is_err(),
+            "ids that are paths are refused"
+        );
         assert!(save_override("a/b", &kf).is_err());
     }
 }

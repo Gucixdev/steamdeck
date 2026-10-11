@@ -47,19 +47,6 @@ pub fn human_bytes(n: u64) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn bytes_are_human() {
-        assert_eq!(human_bytes(0), "0 B");
-        assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(2048), "2 KB");
-        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
-        assert_eq!(human_bytes(1536 * 1024 * 1024), "1.5 GB");
-    }
-}
-
 use iced::widget::button;
 use iced::{Background, Border, Theme as IcedTheme};
 
@@ -69,15 +56,29 @@ pub fn solid(bg: iced::Color) -> impl Fn(&IcedTheme, button::Status) -> button::
         let (bg, text) = match status {
             button::Status::Active => (bg, iced::Color::WHITE),
             button::Status::Hovered | button::Status::Pressed => (
-                iced::Color { r: (bg.r + 0.12).min(1.0), g: (bg.g + 0.12).min(1.0), b: (bg.b + 0.12).min(1.0), a: 1.0 },
+                iced::Color {
+                    r: (bg.r + 0.12).min(1.0),
+                    g: (bg.g + 0.12).min(1.0),
+                    b: (bg.b + 0.12).min(1.0),
+                    a: 1.0,
+                },
                 iced::Color::WHITE,
             ),
-            button::Status::Disabled => (iced::Color { a: 0.35, ..bg }, iced::Color { a: 0.6, ..iced::Color::WHITE }),
+            button::Status::Disabled => (
+                iced::Color { a: 0.35, ..bg },
+                iced::Color {
+                    a: 0.6,
+                    ..iced::Color::WHITE
+                },
+            ),
         };
         button::Style {
             background: Some(Background::Color(bg)),
             text_color: text,
-            border: Border { radius: 8.0.into(), ..Border::default() },
+            border: Border {
+                radius: 8.0.into(),
+                ..Border::default()
+            },
             ..button::Style::default()
         }
     }
@@ -91,4 +92,17 @@ pub fn quiet_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
 }
 pub fn danger_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
     solid(color!(0xc0392b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bytes_are_human() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(2048), "2 KB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
+        assert_eq!(human_bytes(1536 * 1024 * 1024), "1.5 GB");
+    }
 }

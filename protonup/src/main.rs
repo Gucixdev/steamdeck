@@ -30,6 +30,7 @@ options:
   --source ID                    ge (default), cachyos, cachyos-v3, rtsp, sarek, northstar, luxtorpeda
   --dir PATH                     use this compatibilitytools.d instead of the detected Steam
   -y, --yes                      do not ask before `install --all`
+  -j, --jobs N                   downloads at once (default 3, at most 8); interrupted ones resume
   -h, --help                     this text
 
 Restart Steam after an install or removal; then pick the tool in a game's Properties > Compatibility.
@@ -73,6 +74,17 @@ fn main() -> ExitCode {
         Err(e) => return fail(e),
     };
     let all = take_flag(&mut args, &["--all"]);
+    let mut jobs = 3usize;
+    for name in ["-j", "--jobs"] {
+        match take_opt(&mut args, name) {
+            Ok(Some(v)) => match v.parse::<usize>() {
+                Ok(n) if n >= 1 => jobs = n,
+                _ => return fail(format!("{name} needs a number of at least 1")),
+            },
+            Ok(None) => {}
+            Err(e) => return fail(e),
+        }
+    }
     let yes = take_flag(&mut args, &["-y", "--yes"]);
     let src = match source_id.as_deref() {
         None => sources::default_source(),
@@ -117,14 +129,28 @@ fn main() -> ExitCode {
             let n = if all {
                 usize::MAX
             } else {
-                args.iter().position(|a| a == "-n").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(15)
+                args.iter()
+                    .position(|a| a == "-n")
+                    .and_then(|i| args.get(i + 1))
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(15)
             };
             match github::releases(src, n) {
                 Ok(rs) => {
-                    let have: Vec<String> = install::list_installed(&dir_path).into_iter().map(|i| i.name).collect();
+                    let have: Vec<String> = install::list_installed(&dir_path)
+                        .into_iter()
+                        .map(|i| i.name)
+                        .collect();
                     for r in rs {
-                        let size = r.archive(src).map(|a| deck_common::human_bytes(a.size)).unwrap_or_default();
-                        let mark = if have.contains(&r.dir_name(src)) { "installed" } else { "" };
+                        let size = r
+                            .archive(src)
+                            .map(|a| deck_common::human_bytes(a.size))
+                            .unwrap_or_default();
+                        let mark = if have.contains(&r.dir_name(src)) {
+                            "installed"
+                        } else {
+                            ""
+                        };
                         say!("{:<44} {}  {:>9}  {}", r.tag_name, r.date(), size, mark);
                     }
                     ExitCode::SUCCESS
@@ -138,23 +164,53 @@ fn main() -> ExitCode {
                 Ok(r) => r,
                 Err(e) => return fail(e),
             };
-            let have: Vec<String> = install::list_installed(&dir_path).into_iter().map(|i| i.name).collect();
+            let have: Vec<String> = install::list_installed(&dir_path)
+                .into_iter()
+                .map(|i| i.name)
+                .collect();
             let todo: Vec<&github::Release> = if all {
-                rs.iter().filter(|r| !have.contains(&r.dir_name(src)) || matches!(src.dir, sources::DirName::Fixed(_))).collect()
+                rs.iter()
+                    .filter(|r| {
+                        !have.contains(&r.dir_name(src))
+                            || matches!(src.dir, sources::DirName::Fixed(_))
+                    })
+                    .collect()
             } else {
-                let one = if want == "latest" { rs.first() } else { rs.iter().find(|r| r.tag_name == want || r.dir_name(src) == want) };
+                let one = if want == "latest" {
+                    rs.first()
+                } else {
+                    rs.iter()
+                        .find(|r| r.tag_name == want || r.dir_name(src) == want)
+                };
                 match one {
                     Some(r) => vec![r],
-                    None => return fail(format!("no {} release '{want}' (see `protonup list`)", src.name)),
+                    None => {
+                        return fail(format!(
+                            "no {} release '{want}' (see `protonup list`)",
+                            src.name
+                        ))
+                    }
                 }
             };
             if todo.is_empty() {
-                say!("nothing to install: all {} releases are already there", src.name);
+                say!(
+                    "nothing to install: all {} releases are already there",
+                    src.name
+                );
                 return ExitCode::SUCCESS;
             }
             if all {
-                let total: u64 = todo.iter().filter_map(|r| r.archive(src)).map(|a| a.size).sum();
-                say!("{} releases of {} not installed yet, {} to download (more once unpacked)", todo.len(), src.name, deck_common::human_bytes(total));
+                let total: u64 = todo
+                    .iter()
+                    .filter_map(|r| r.archive(src))
+                    .map(|a| a.size)
+                    .sum();
+                say!(
+                    "{} releases of {} not installed yet, {} to download (more once unpacked)",
+                    todo.len(),
+                    src.name,
+                    deck_common::human_bytes(total)
+                );
                 if !yes {
                     print!("continue? [y/N] ");
                     let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -166,33 +222,82 @@ fn main() -> ExitCode {
                     }
                 }
             }
-            let mut failed = 0;
-            for rel in todo {
-                say!("installing {} into {}", rel.tag_name, dir_path.display());
-                let mut last = 0u64;
-                let res = install::install(src, rel, &dir_path, &mut |p| match p {
-                    install::Progress::Phase(s) => {
-                        if last > 0 {
-                            say!();
-                            last = 0;
+            // dspq style: the list is a FIFO, `jobs` workers pull from it, one aggregate progress line
+            let jobs = jobs.clamp(1, 8).min(todo.len());
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let finished = std::sync::atomic::AtomicUsize::new(0);
+            let failed = std::sync::atomic::AtomicUsize::new(0);
+            let have_bytes: Vec<std::sync::atomic::AtomicU64> = todo
+                .iter()
+                .map(|_| std::sync::atomic::AtomicU64::new(0))
+                .collect();
+            let sizes: Vec<u64> = todo
+                .iter()
+                .map(|r| r.archive(src).map(|a| a.size).unwrap_or(0))
+                .collect();
+            let out = std::sync::Mutex::new(());
+            let tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
+            let ord = std::sync::atomic::Ordering::SeqCst;
+            say!(
+                "installing {} release(s) into {}, {} at a time",
+                todo.len(),
+                dir_path.display(),
+                jobs
+            );
+            std::thread::scope(|sc| {
+                for _ in 0..jobs {
+                    sc.spawn(|| loop {
+                        let i = next.fetch_add(1, ord);
+                        let Some(rel) = todo.get(i) else { break };
+                        let res = install::install(src, rel, &dir_path, &mut |p| {
+                            if let install::Progress::Download { done, .. } = p {
+                                have_bytes[i].store(done, ord);
+                            }
+                        });
+                        let _g = out.lock();
+                        if tty {
+                            eprint!("\r{:78}\r", "");
                         }
-                        say!("  {s}");
-                    }
-                    install::Progress::Download { done, total } => {
-                        last = done;
-                        let pct = (done * 100).checked_div(total).unwrap_or(0);
-                        print!("\r  download {:>3}%  {} / {}", pct, deck_common::human_bytes(done), deck_common::human_bytes(total));
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
-                    }
-                });
-                match res {
-                    Ok(o) => say!("installed {}{}", o.path.display(), if o.verified { "" } else { "  (the project publishes no checksum: not verified)" }),
-                    Err(e) => {
-                        failed += 1;
-                        eprintln!("\nprotonup: {}: {e}", rel.tag_name);
-                    }
+                        match res {
+                            Ok(o) => say!(
+                                "installed {}{}",
+                                o.path.display(),
+                                if o.verified {
+                                    ""
+                                } else {
+                                    "  (the project publishes no checksum: not verified)"
+                                }
+                            ),
+                            Err(e) => {
+                                failed.fetch_add(1, ord);
+                                eprintln!("protonup: {}: {e}", rel.tag_name);
+                            }
+                        }
+                        finished.fetch_add(1, ord);
+                    });
                 }
+                while finished.load(ord) < todo.len() {
+                    let have: u64 = have_bytes.iter().map(|b| b.load(ord)).sum();
+                    let want: u64 = sizes.iter().sum();
+                    let _g = out.lock();
+                    if tty {
+                        eprint!(
+                            "\r  queue: {}/{} done   {} / {}   -j{}  ",
+                            finished.load(ord),
+                            todo.len(),
+                            deck_common::human_bytes(have),
+                            deck_common::human_bytes(want),
+                            jobs
+                        );
+                    }
+                    drop(_g);
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            });
+            if tty {
+                eprint!("\r{:78}\r", "");
             }
+            let failed = failed.load(ord);
             if failed > 0 {
                 return ExitCode::FAILURE;
             }

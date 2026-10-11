@@ -5,3 +5,4 @@
 pub mod flatpak;
 pub mod keyfile;
 pub mod perms;
+pub mod portals;
