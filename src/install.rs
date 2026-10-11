@@ -58,6 +58,9 @@ pub fn list_installed_with(dir: &Path, sizes: bool) -> Vec<Installed> {
         {
             continue;
         }
+        if !crate::games::runs_windows_games(&path) {
+            continue;
+        }
         out.push(Installed {
             size: if sizes { dir_size(&path) } else { 0 },
             tool: crate::games::internal_name(&path).unwrap_or_else(|| name.clone()),

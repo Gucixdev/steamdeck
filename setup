@@ -459,8 +459,11 @@ system_run() {
 firefox_profile() {
 	local base d
 	if [ -n "${FIREFOX_PROFILE:-}" ]; then printf '%s\n' "$FIREFOX_PROFILE"; return 0; fi
-	for base in "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox" "$HOME/.mozilla/firefox"; do
+	for base in "$HOME/.var/app/org.mozilla.firefox/config/mozilla/firefox" "$HOME/.var/app/org.mozilla.firefox/.mozilla/firefox" "$HOME/.config/mozilla/firefox" "$HOME/.mozilla/firefox"; do
 		[ -d "$base" ] || continue
+		# the profile this install actually uses is in installs.ini; profiles.ini's Default=1 can be stale
+		d=$(awk -F= '/^Default=/{print $2; exit}' "$base/installs.ini" 2>/dev/null)
+		[ -n "$d" ] && [ -d "$base/$d" ] && { printf '%s/%s\n' "$base" "$d"; return 0; }
 		d=$(awk -F= '/^Path=/{p=$2} /^Default=1/{print p; exit}' "$base/profiles.ini" 2>/dev/null)
 		[ -n "$d" ] && [ -d "$base/$d" ] && { printf '%s/%s\n' "$base" "$d"; return 0; }
 		d=$(find "$base" -maxdepth 1 -type d -name '*.default*' 2>/dev/null | head -1)
