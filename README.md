@@ -30,12 +30,15 @@ or only the program, straight from the latest release (SHA-256 verified against 
 curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/setup | bash
 ```
 
-`setup` asks what you want and shows the list before it changes anything: the program (menu entry and the
+`setup` asks what you want and shows the list before it changes anything: the program (the ProtonUp and Flatseal menu entries and the
 `protonup` / `flatseal` command names), a weekly Proton-GE update, the OOM guard, memory settings, swap
 size, ssh, and preparing Firefox (telemetry and sponsored content off, WebRTC leak guard, uBlock Origin;
 Mullvad VPN is a system app, not a Firefox add-on). Run `./setup` again to see the state or remove it.
 
-For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick Steam Deck.
+The menu gets two entries, **ProtonUp** and **Flatseal**, each opening its own page of the window. The system
+tweaks stay in `setup`, which you run from a terminal when you want them.
+
+For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick ProtonUp and Flatseal.
 
 ## Layout
 

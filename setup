@@ -47,7 +47,7 @@ setup - a wizard for a Steam Deck: asks what you want, shows the list, then does
                            the same from GitHub: installs the program from the latest release
 
 What it can do:
-  programs   the steamdeck program (ProtonUp + Flatseal + System in one window) into ~/.local/bin, with
+  programs   the steamdeck program (ProtonUp and Flatseal windows) into ~/.local/bin, with
              the protonup and flatseal command names, a menu entry, optional weekly Proton-GE update
   system     OOM guard (systemd-oomd), memory sysctl for zram, swap file size, ssh (asks sudo, /etc only)
   firefox    telemetry and sponsored content off, WebRTC leak guard, uBlock Origin in the default profile
@@ -109,10 +109,17 @@ APPDIR=$PREFIX/share/applications
 ICONDIR=$PREFIX/share/icons/hicolor/scalable/apps
 UNITDIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
 
-title() { echo "Steam Deck"; }
-comment() { echo "ProtonUp, Flatseal and system setup"; }
-icon_color() { echo "#1a9fff"; }
-icon_glyph() { echo "D"; }
+# the menu / Gaming Mode entries: one per window the program offers (the system tweaks are `setup`)
+ENTRIES=(protonup flatseal)
+title() { case $1 in protonup) echo "ProtonUp" ;; flatseal) echo "Flatseal" ;; esac; }
+comment() {
+	case $1 in
+		protonup) echo "Install and pick Proton versions for Steam games" ;;
+		flatseal) echo "Flatpak permissions" ;;
+	esac
+}
+icon_color() { case $1 in protonup) echo "#1a9fff" ;; *) echo "#e8a33d" ;; esac; }
+icon_glyph() { case $1 in protonup) echo "P" ;; *) echo "F" ;; esac; }
 
 # a desktop entry's Exec needs quotes when the path has a space (and escapes for quote, $, ` and \)
 desktop_exec() {
@@ -144,6 +151,10 @@ programs_uninstall() {
 	local n
 	for n in "${APPS[@]}"; do
 		prun rm -f "$BIN/$n" "$APPDIR/$n.desktop" "$ICONDIR/$n.svg"
+	done
+	# the entries (and the single "Steam Deck" entry older versions wrote)
+	for n in "${ENTRIES[@]}"; do
+		prun rm -f "$APPDIR/steamdeck-$n.desktop" "$ICONDIR/steamdeck-$n.svg"
 	done
 	for n in "${CMDS[@]}"; do
 		# only our own link; a real protonup/flatseal of the user's is not ours to remove
@@ -245,17 +256,19 @@ programs_install() {
 	done
 
 	if [ "$DESKTOP" = 1 ]; then
-		for n in "${APPS[@]}"; do
-			write_file "$ICONDIR/$n.svg" <<SVG
+		# an entry written by an older version that opened one window with every page
+		prun rm -f "$APPDIR/steamdeck.desktop" "$ICONDIR/steamdeck.svg"
+		for n in "${ENTRIES[@]}"; do
+			write_file "$ICONDIR/steamdeck-$n.svg" <<SVG
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#0b0b10"/><circle cx="64" cy="64" r="48" fill="none" stroke="$(icon_color "$n")" stroke-width="10"/><text x="64" y="86" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="64" fill="#00ff41">$(icon_glyph "$n")</text></svg>
 SVG
-			write_file "$APPDIR/$n.desktop" <<DESK
+			write_file "$APPDIR/steamdeck-$n.desktop" <<DESK
 [Desktop Entry]
 Type=Application
 Name=$(title "$n")
 Comment=$(comment "$n")
-Exec=$(desktop_exec "$BIN/$n")
-Icon=$n
+Exec=$(desktop_exec "$BIN/steamdeck") $n gui
+Icon=steamdeck-$n
 Terminal=false
 Categories=Utility;Game;
 DESK
@@ -292,8 +305,8 @@ UNIT
 	fi
 
 	case ":$PATH:" in *":$BIN:"*) ;; *) say "note: $BIN is not in your PATH; run the tools by full path or add it" ;; esac
-	say "Desktop Mode: find Steam Deck in the application menu (or run steamdeck)."
-	say "Gaming Mode: Steam (Desktop Mode) > Games > Add a Non-Steam Game > Steam Deck."
+	say "Desktop Mode: find ProtonUp and Flatseal in the application menu (or run protonup, flatseal)."
+	say "Gaming Mode: Steam (Desktop Mode) > Games > Add a Non-Steam Game > ProtonUp, Flatseal."
 }
 
 # ============================== system ==================================================

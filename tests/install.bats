@@ -21,9 +21,12 @@ teardown() { rm -rf "$T"; }
 	[ "$("$T/p/bin/steamdeck")" = steamdeck-fake ]
 	[ "$(readlink "$T/p/bin/protonup")" = steamdeck ]
 	[ "$(readlink "$T/p/bin/flatseal")" = steamdeck ]
-	grep -q "^Exec=$T/p/bin/steamdeck$" "$T/p/share/applications/steamdeck.desktop"
-	grep -q '^Name=Steam Deck$' "$T/p/share/applications/steamdeck.desktop"
-	grep -q '<svg' "$T/p/share/icons/hicolor/scalable/apps/steamdeck.svg"
+	grep -q "^Exec=$T/p/bin/steamdeck protonup gui$" "$T/p/share/applications/steamdeck-protonup.desktop"
+	grep -q "^Exec=$T/p/bin/steamdeck flatseal gui$" "$T/p/share/applications/steamdeck-flatseal.desktop"
+	grep -q '^Name=ProtonUp$' "$T/p/share/applications/steamdeck-protonup.desktop"
+	grep -q '^Name=Flatseal$' "$T/p/share/applications/steamdeck-flatseal.desktop"
+	grep -q '<svg' "$T/p/share/icons/hicolor/scalable/apps/steamdeck-protonup.svg"
+	[ ! -e "$T/p/share/applications/steamdeck.desktop" ]
 }
 
 @test "a tampered binary is refused and nothing is installed" {
@@ -77,7 +80,8 @@ teardown() { rm -rf "$T"; }
 	[ "$status" -eq 0 ]
 	[ ! -e "$T/p/bin/steamdeck" ]
 	[ ! -e "$T/p/bin/protonup" ]
-	[ ! -e "$T/p/share/applications/steamdeck.desktop" ]
+	[ ! -e "$T/p/share/applications/steamdeck-protonup.desktop" ]
+	[ ! -e "$T/p/share/applications/steamdeck-flatseal.desktop" ]
 	[ ! -e "$T/home/.config/systemd/user/protonup-update.timer" ]
 }
 
@@ -174,7 +178,7 @@ teardown() { rm -rf "$T"; }
 	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/my prefix"
 	[ "$status" -eq 0 ]
 	[ -x "$T/my prefix/bin/steamdeck" ]
-	grep -q "^Exec=\"$T/my prefix/bin/steamdeck\"$" "$T/my prefix/share/applications/steamdeck.desktop"
+	grep -q "^Exec=\"$T/my prefix/bin/steamdeck\" protonup gui$" "$T/my prefix/share/applications/steamdeck-protonup.desktop"
 }
 
 @test "installing over a running program works and leaves no temporary file" {
@@ -216,4 +220,13 @@ teardown() { rm -rf "$T"; }
 	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
 	run "$ROOT/setup" --programs --uninstall --prefix "$T/p"
 	[ "$status" -eq 0 ]
+}
+
+@test "an entry left by the older single-window version is replaced, not kept next to the new ones" {
+	mkdir -p "$T/p/share/applications"
+	printf '[Desktop Entry]\nName=Steam Deck\n' > "$T/p/share/applications/steamdeck.desktop"
+	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p"
+	[ "$status" -eq 0 ]
+	[ ! -e "$T/p/share/applications/steamdeck.desktop" ]
+	[ -f "$T/p/share/applications/steamdeck-protonup.desktop" ]
 }
