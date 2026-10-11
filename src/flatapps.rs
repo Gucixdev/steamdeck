@@ -368,7 +368,11 @@ fn pretty_ref(r: &str) -> String {
 
 /// Run a shell command line, send every output line to the log while it runs, and return
 /// (success, all the lines). Its stdin is closed, so nothing can sit waiting for an answer.
-fn stream_cmd(cmd: &str, progress: &Arc<Mutex<(usize, usize, String)>>) -> (bool, String) {
+fn stream_cmd(
+    cmd: &str,
+    progress: &Arc<Mutex<(usize, usize, String)>>,
+    changed: &mut Vec<String>,
+) -> (bool, String) {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     let child = Command::new("sh")
@@ -395,12 +399,16 @@ fn stream_cmd(cmd: &str, progress: &Arc<Mutex<(usize, usize, String)>>) -> (bool
                         .strip_prefix("Installing ")
                         .or_else(|| t.strip_prefix("Updating "))
                     {
+                        let r = r.split_whitespace().next().unwrap_or(r).to_string();
                         if let Ok(mut p) = progress.lock() {
                             p.0 += 1;
                             if p.0 > p.1 {
                                 p.1 = p.0;
                             }
-                            p.2 = pretty_ref(r);
+                            p.2 = pretty_ref(&r);
+                        }
+                        if !changed.contains(&r) {
+                            changed.push(r);
                         }
                     }
                     all.push_str(t);
@@ -434,9 +442,11 @@ fn update_all_streaming(progress: Arc<Mutex<(usize, usize, String)>>) -> String 
     if let Ok(mut p) = progress.lock() {
         p.1 = expected;
     }
+    let mut changed: Vec<String> = Vec::new();
     let (ok, out) = stream_cmd(
         "timeout 1800 flatpak update --user -y --noninteractive",
         &progress,
+        &mut changed,
     );
     report.push(format!(
         "your apps: {}",
@@ -477,6 +487,7 @@ fn update_all_streaming(progress: Arc<Mutex<(usize, usize, String)>>) -> String 
         let (ok2, out2) = stream_cmd(
             "timeout 1800 pkexec flatpak update --system -y --noninteractive",
             &progress,
+            &mut changed,
         );
         report.push(format!(
             "system apps ({pending} update(s)): {}",
@@ -489,6 +500,33 @@ fn update_all_streaming(progress: Arc<Mutex<(usize, usize, String)>>) -> String 
         if !ok2 {
             report.push(tail(&out2));
         }
+    }
+    // which ones changed: apps first, runtimes (and their locale/extension parts) after
+    let apps: Vec<String> = changed
+        .iter()
+        .filter(|r| r.starts_with("app/"))
+        .map(|r| pretty_ref(r))
+        .collect();
+    let runtimes: Vec<String> = changed
+        .iter()
+        .filter(|r| r.starts_with("runtime/"))
+        .map(|r| pretty_ref(r))
+        .collect();
+    if apps.is_empty() && runtimes.is_empty() {
+        report.push("nothing needed updating".to_string());
+    }
+    if !apps.is_empty() {
+        report.push(format!(
+            "updated apps ({}): {}",
+            apps.len(),
+            apps.join(", ")
+        ));
+    }
+    if !runtimes.is_empty() {
+        let mut u = runtimes.clone();
+        u.sort();
+        u.dedup();
+        report.push(format!("runtimes ({}): {}", u.len(), u.join(", ")));
     }
     report.join("\n")
 }
@@ -669,5 +707,24 @@ mod tests {
             "org.gimp.GIMP"
         );
         assert_eq!(pretty_ref("weird"), "weird");
+    }
+    #[test]
+    fn the_changed_refs_are_collected_from_the_output_lines() {
+        let progress = Arc::new(Mutex::new((0usize, 3usize, String::new())));
+        let mut changed = Vec::new();
+        let script = "printf 'Info: x is end-of-life\\nInstalling runtime/org.gnome.Platform/x86_64/51\\nUpdating app/org.gimp.GIMP/x86_64/stable\\nUpdating app/org.gimp.GIMP/x86_64/stable\\n'";
+        let (ok, out) = stream_cmd(script, &progress, &mut changed);
+        assert!(ok);
+        assert!(out.contains("Info: x is end-of-life"));
+        assert_eq!(
+            changed,
+            [
+                "runtime/org.gnome.Platform/x86_64/51",
+                "app/org.gimp.GIMP/x86_64/stable"
+            ]
+        );
+        let p = progress.lock().unwrap();
+        assert_eq!(p.0, 3, "every Installing/Updating line is one step");
+        assert_eq!(p.2, "org.gimp.GIMP");
     }
 }
