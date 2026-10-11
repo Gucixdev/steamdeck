@@ -1,25 +1,52 @@
 #!/usr/bin/env bash
-# run - build both programs (only when the code changed), then start the one you pick.
+# run - build both programs when the code changed, install them, start the one you pick.
 #
-#   ./run                  builds if needed, asks which one to start
-#   ./run protonup         builds if needed, starts protonup (no arguments are passed on)
+#   ./run                  asks which one to start
+#   ./run protonup         starts protonup (no arguments are passed on)
 #   ./run flatseal         the same for flatseal
-#   ./run --release ...    optimised build instead of the quick debug one
+#   ./run --release        optimised build instead of the quick debug one (combine with a name)
+#   ./run --publish TAG    portable build (old glibc via zig) into dist/ and a GitHub release TAG
 #
-# A build is skipped when no file in src/ or the Cargo files is newer than the binaries, so a repeated
-# ./run starts immediately; after an edit it rebuilds both and starts the chosen one.
+# The build is skipped when no file in src/ or the Cargo files is newer than the binaries, so a repeated
+# ./run starts at once. Installing is `./setup --programs --local`: ~/.local/bin and the menu entries,
+# only the files that changed. `--publish` is what makes the release the installer downloads.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
+die() { printf 'run: %s\n' "$*" >&2; exit 1; }
+
 PROFILE=debug
 FLAGS=()
-if [ "${1:-}" = --release ]; then
-	PROFILE=release
-	FLAGS=(--release)
-	shift
-fi
+PUBLISH=
+while [ $# -gt 0 ]; do
+	case $1 in
+		--release) PROFILE=release; FLAGS=(--release); shift ;;
+		--publish) PUBLISH=${2:?--publish needs a tag}; shift 2 ;;
+		*) break ;;
+	esac
+done
 
 PROGS=(protonup flatseal)
+
+if [ -n "$PUBLISH" ]; then
+	GLIBC=2.36 # SteamOS 3.5 ships 2.37; the binary then runs on every SteamOS, not just this machine
+	T=x86_64-unknown-linux-gnu
+	command -v cargo-zigbuild >/dev/null || die "--publish needs cargo-zigbuild and zig (cargo install cargo-zigbuild)"
+	command -v gh >/dev/null || die "--publish needs gh"
+	rustup target add "$T" >/dev/null 2>&1 || true
+	cargo zigbuild --release --target "$T.$GLIBC" --bins
+	mkdir -p dist
+	for p in "${PROGS[@]}"; do install -m 755 "target/$T/release/$p" "dist/$p-x86_64-linux"; done
+	(cd dist && sha256sum -- *-x86_64-linux > SHA256SUMS)
+	for p in "${PROGS[@]}"; do
+		v=$(objdump -T "dist/$p-x86_64-linux" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+		printf '%-10s needs glibc %s\n' "$p" "${v:-?}"
+	done
+	gh release create "$PUBLISH" dist/*-x86_64-linux dist/SHA256SUMS --title "$PUBLISH" \
+		--notes "protonup and flatseal $PUBLISH: single binaries for x86_64 Linux (Steam Deck). Install with ./setup."
+	exit 0
+fi
+
 TARGET=${CARGO_TARGET_DIR:-target}/$PROFILE
 
 stale=0
@@ -36,6 +63,8 @@ else
 	echo "run: build is up to date" >&2
 fi
 
+./setup --programs --local "$TARGET" >&2
+
 prog=${1:-}
 if [ -z "$prog" ]; then
 	i=1
@@ -48,11 +77,9 @@ if [ -z "$prog" ]; then
 		[0-9]*) prog=${PROGS[$((n - 1))]:-} ;;
 		*) prog=$n ;;
 	esac
-else
-	shift
 fi
 case " ${PROGS[*]} " in
 	*" $prog "*) ;;
-	*) echo "run: unknown program '$prog' (${PROGS[*]})" >&2; exit 2 ;;
+	*) die "unknown program '$prog' (${PROGS[*]})" ;;
 esac
 exec "$TARGET/$prog"

@@ -1,32 +1,465 @@
 #!/usr/bin/env bash
-# setup - a wizard for a fresh Steam Deck: asks what you want, shows the list, then does it.
+# setup - a wizard for a Steam Deck: asks what you want, shows the list, then does it.
 #
-#   ./setup                  ask, confirm, apply
+#   ./setup                  the wizard (set up, show what is set up, remove it again)
+#   curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/setup | bash
+#                            the same from GitHub: installs ProtonUp and Flatseal from the latest release
 #
-# It runs two scripts from scripts/: `install` (ProtonUp and Flatseal into ~/.local/bin) and `system`
-# (OOM guard, sysctl, swap file, ssh; asks sudo once). Nothing is changed until you confirm the summary.
-# Testing only: --dry-run prints what would run, --root DIR writes the /etc files under DIR.
+# What it can do:
+#   programs   ProtonUp and Flatseal into ~/.local/bin, menu entries, optional weekly Proton-GE update
+#   system     OOM guard (systemd-oomd), memory sysctl for zram, swap file size, ssh (asks sudo, /etc only)
+#
+# Nothing changes until you confirm the summary. Files written under /etc start with a
+# "managed by steamdeck/setup" line, so undo removes exactly those and nothing else.
+#
+# Options for scripts and tests (the wizard needs none of them):
+#   --programs             only the programs step, no questions
+#   --system ACTION...     only the system step: oom, sysctl, swapfile SIZE, ssh, all, status, undo
+#   --only NAME            just protonup or flatseal (repeatable)
+#   --prefix DIR           install under DIR (default ~/.local)
+#   --version TAG          a release tag instead of the latest
+#   --from DIR             binaries + SHA256SUMS from DIR instead of downloading (checksums verified)
+#   --local DIR            your own build: DIR/protonup and DIR/flatseal, copied if they changed
+#   --timer                weekly `protonup install latest` systemd user timer
+#   --no-desktop           no menu entries or icons
+#   --uninstall            remove the programs
+#   --swappiness N         for the sysctl action (default 100)
+#   --root DIR             write the /etc files under DIR and only print the system commands
+#   --dry-run              print what would happen, change nothing
 set -euo pipefail
 
-HERE=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-DRY=()
-ROOTOPT=()
+ARGS=("$@")
+SELF=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)
+[ -f "$SELF" ] || SELF=
+HERE=
+[ -z "$SELF" ] || HERE=$(dirname "$SELF")
+
+REPO=${STEAMDECK_REPO:-Gucixdev/steamdeck}
+PREFIX=${HOME}/.local
+VERSION=latest
+FROM=
+LOCAL=
+TIMER=0
+DESKTOP=1
+UNINSTALL=0
+DRY=0
+ONLY=()
+MODE=wizard
+ROOT=/
+SWAPPINESS=100
+ACTIONS=()
+SUFFIX=x86_64-linux
+MARK="# managed by steamdeck/setup"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
 while [ $# -gt 0 ]; do
 	case $1 in
-		--dry-run) DRY=(--dry-run) ;;
-		--root) ROOTOPT=(--root "${2:?--root needs a directory}"); shift ;;
-		-h|--help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-		*) echo "setup: unknown option $1" >&2; exit 2 ;;
+		--programs) MODE=programs ;;
+		--system) MODE=system ;;
+		--only) ONLY+=("${2:?--only needs a name}"); shift ;;
+		--prefix) PREFIX=${2:?--prefix needs a directory}; shift ;;
+		--version) VERSION=${2:?--version needs a tag}; shift ;;
+		--from) FROM=${2:?--from needs a directory}; shift ;;
+		--local) LOCAL=${2:?--local needs a directory}; shift ;;
+		--timer) TIMER=1 ;;
+		--no-desktop) DESKTOP=0 ;;
+		--uninstall) UNINSTALL=1 ;;
+		--swappiness) SWAPPINESS=${2:?--swappiness needs a number}; shift ;;
+		--root) ROOT=${2:?--root needs a directory}; shift ;;
+		--dry-run) DRY=1 ;;
+		-h|--help) usage; exit 0 ;;
+		-*) die "unknown option $1 (see --help)" ;;
+		*) ACTIONS+=("$1") ;;
 	esac
 	shift
 done
+
+# ============================== programs ================================================
+
+ALL=(protonup flatseal)
+APPS=("${ALL[@]}")
+if [ ${#ONLY[@]} -gt 0 ]; then
+	APPS=()
+	for n in "${ONLY[@]}"; do
+		case $n in protonup|flatseal) APPS+=("$n") ;; *) die "no such tool '$n' (protonup, flatseal)" ;; esac
+	done
+fi
+
+BIN=$PREFIX/bin
+APPDIR=$PREFIX/share/applications
+ICONDIR=$PREFIX/share/icons/hicolor/scalable/apps
+UNITDIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+
+title() { case $1 in protonup) echo "ProtonUp" ;; flatseal) echo "Flatseal" ;; esac; }
+comment() {
+	case $1 in
+		protonup) echo "Install and remove Proton-GE and other compatibility tools" ;;
+		flatseal) echo "Edit Flatpak permission overrides" ;;
+	esac
+}
+icon_color() { case $1 in protonup) echo "#7b3fe4" ;; flatseal) echo "#00c853" ;; esac; }
+icon_glyph() { case $1 in protonup) echo "P" ;; flatseal) echo "F" ;; esac; }
+
+prun() { if [ "$DRY" = 1 ]; then printf '+ %s\n' "$*"; else "$@"; fi; }
+
+write_file() { # path, mode; content on stdin
+	local path=$1 mode=${2:-644}
+	if [ "$DRY" = 1 ]; then printf '+ write %s\n' "$path"; cat >/dev/null; return; fi
+	mkdir -p "$(dirname "$path")"
+	local tmp="$path.tmp.$$"
+	cat >"$tmp"
+	chmod "$mode" "$tmp"
+	mv -f "$tmp" "$path"
+}
+
+nosystemd() { ! command -v systemctl >/dev/null || [ -n "${STEAMDECK_NO_SYSTEMD:-}" ]; }
+
+programs_uninstall() {
+	local n
+	for n in "${APPS[@]}"; do
+		prun rm -f "$BIN/$n" "$APPDIR/$n.desktop" "$ICONDIR/$n.svg"
+	done
+	if [ -f "$UNITDIR/protonup-update.timer" ]; then
+		nosystemd || prun systemctl --user disable --now protonup-update.timer 2>/dev/null || true
+		prun rm -f "$UNITDIR/protonup-update.timer" "$UNITDIR/protonup-update.service"
+		nosystemd || prun systemctl --user daemon-reload 2>/dev/null || true
+	fi
+	command -v update-desktop-database >/dev/null && prun update-desktop-database "$APPDIR" 2>/dev/null || true
+	say "removed the programs from $PREFIX"
+}
+
+fetch() { # url, destination
+	if command -v curl >/dev/null; then
+		curl -fsSL --retry 3 -o "$2" "$1"
+	elif command -v wget >/dev/null; then
+		wget -q -O "$2" "$1"
+	else
+		die "need curl or wget"
+	fi
+}
+
+# programs_install: puts the binaries in $BIN from --local, --from or the GitHub release
+programs_install() {
+	local n f src want got base work
+	[ "$(uname -s)" = Linux ] || die "Linux only"
+
+	if [ -n "$LOCAL" ]; then
+		for n in "${APPS[@]}"; do
+			[ -x "$LOCAL/$n" ] || die "$LOCAL/$n is missing (build it first)"
+			if [ -x "$BIN/$n" ] && cmp -s "$LOCAL/$n" "$BIN/$n"; then
+				say "$BIN/$n is up to date"
+				continue
+			fi
+			if [ "$DRY" = 1 ]; then
+				printf '+ install %s -> %s/%s\n' "$LOCAL/$n" "$BIN" "$n"
+			else
+				mkdir -p "$BIN"
+				install -m 755 "$LOCAL/$n" "$BIN/$n.new.$$"
+				mv -f "$BIN/$n.new.$$" "$BIN/$n"
+			fi
+			say "installed $BIN/$n"
+		done
+	else
+		case $(uname -m) in x86_64|amd64) ;; *) die "x86_64 only (this is $(uname -m))" ;; esac
+		command -v sha256sum >/dev/null || die "sha256sum not found"
+		work=$(mktemp -d)
+		# shellcheck disable=SC2064
+		trap "rm -rf '$work'" EXIT
+		if [ -n "$FROM" ]; then
+			[ -d "$FROM" ] || die "--from: $FROM is not a directory"
+			src=$FROM
+			say "using local files from $FROM"
+		else
+			if [ "$VERSION" = latest ]; then
+				base=${STEAMDECK_RELEASE_URL:-https://github.com/$REPO/releases/latest/download}
+			else
+				base=${STEAMDECK_RELEASE_URL:-https://github.com/$REPO/releases/download/$VERSION}
+			fi
+			say "downloading $VERSION from $base"
+			fetch "$base/SHA256SUMS" "$work/SHA256SUMS" || die "could not fetch SHA256SUMS from $base"
+			for n in "${APPS[@]}"; do
+				fetch "$base/$n-$SUFFIX" "$work/$n-$SUFFIX" || die "could not fetch $n"
+			done
+			src=$work
+		fi
+		[ -f "$src/SHA256SUMS" ] || die "no SHA256SUMS next to the binaries"
+		for n in "${APPS[@]}"; do
+			f=$n-$SUFFIX
+			[ -f "$src/$f" ] || die "$src/$f is missing"
+			want=$(awk -v f="$f" '$2 == f || $2 == "*" f {print $1}' "$src/SHA256SUMS" | head -1)
+			[ -n "$want" ] || die "$f is not listed in SHA256SUMS"
+			got=$(sha256sum "$src/$f" | awk '{print $1}')
+			[ "$want" = "$got" ] || die "checksum mismatch for $f (expected ${want:0:16}..., got ${got:0:16}...): nothing installed"
+		done
+		for n in "${APPS[@]}"; do
+			f=$n-$SUFFIX
+			if [ "$DRY" = 1 ]; then
+				printf '+ install %s -> %s/%s\n' "$f" "$BIN" "$n"
+			else
+				mkdir -p "$BIN"
+				install -m 755 "$src/$f" "$BIN/$n.new.$$"
+				mv -f "$BIN/$n.new.$$" "$BIN/$n"
+			fi
+			say "installed $BIN/$n"
+		done
+	fi
+
+	if [ "$DESKTOP" = 1 ]; then
+		for n in "${APPS[@]}"; do
+			write_file "$ICONDIR/$n.svg" <<SVG
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#0b0b10"/><circle cx="64" cy="64" r="48" fill="none" stroke="$(icon_color "$n")" stroke-width="10"/><text x="64" y="86" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="64" fill="#00ff41">$(icon_glyph "$n")</text></svg>
+SVG
+			write_file "$APPDIR/$n.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=$(title "$n")
+Comment=$(comment "$n")
+Exec=$BIN/$n
+Icon=$n
+Terminal=false
+Categories=Utility;Game;
+DESK
+		done
+		command -v update-desktop-database >/dev/null && prun update-desktop-database "$APPDIR" 2>/dev/null || true
+	fi
+
+	if [ "$TIMER" = 1 ]; then
+		case " ${APPS[*]} " in *" protonup "*) ;; *) die "--timer needs protonup in the install" ;; esac
+		write_file "$UNITDIR/protonup-update.service" <<UNIT
+[Unit]
+Description=Install the newest Proton-GE
+
+[Service]
+Type=oneshot
+ExecStart=$BIN/protonup install latest
+UNIT
+		write_file "$UNITDIR/protonup-update.timer" <<UNIT
+[Unit]
+Description=Weekly Proton-GE update
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+		if ! nosystemd; then
+			prun systemctl --user daemon-reload || true
+			prun systemctl --user enable --now protonup-update.timer || say "could not enable the timer (no user systemd session?); the unit files are in $UNITDIR"
+		fi
+		say "weekly Proton-GE update timer installed"
+	fi
+
+	case ":$PATH:" in *":$BIN:"*) ;; *) say "note: $BIN is not in your PATH; run the tools by full path or add it" ;; esac
+	say "Desktop Mode: find ProtonUp and Flatseal in the application menu."
+	say "Gaming Mode: Steam (Desktop Mode) > Games > Add a Non-Steam Game > ProtonUp / Flatseal."
+}
+
+# ============================== system ==================================================
+
+LIVE=1
+ROOT=${ROOT%/}
+[ -z "$ROOT" ] || LIVE=0
+[ "$DRY" = 0 ] || LIVE=0
+
+P() { printf '%s%s' "$ROOT" "$1"; } # a path under the root
+
+srun() { if [ "$LIVE" = 1 ]; then "$@"; else printf '+ %s\n' "$*"; fi; }
+
+managed() { [ -f "$1" ] && head -1 "$1" | grep -qF "$MARK"; }
+
+# write_conf PATH  (content on stdin); PATH is absolute, before the root is applied
+write_conf() {
+	local rel=$1 path
+	path=$(P "$rel")
+	if [ -e "$path" ] && ! managed "$path"; then
+		cat >/dev/null
+		say "skip $rel: it exists and was not written by this script"
+		return 0
+	fi
+	if [ "$DRY" = 1 ]; then
+		say "would write $rel"
+		cat >/dev/null
+		return 0
+	fi
+	mkdir -p "$(dirname "$path")"
+	{
+		printf '%s\n' "$MARK"
+		cat
+	} >"$path.tmp.$$"
+	mv -f "$path.tmp.$$" "$path"
+	say "wrote $rel"
+}
+
+have_systemd() { [ "$LIVE" = 0 ] || command -v systemctl >/dev/null; }
+
+action_oom() {
+	say "== oom: systemd-oomd"
+	write_conf /etc/systemd/oomd.conf.d/10-steamdeck.conf <<'CONF'
+# When swap is 90% full, or a cgroup stalls on memory for 20 s at 60% pressure, systemd-oomd kills the
+# worst offender in the user's slice (the game) instead of letting the whole machine thrash.
+[OOM]
+SwapUsedLimit=90%
+DefaultMemoryPressureLimit=60%
+DefaultMemoryPressureDurationSec=20s
+CONF
+	write_conf /etc/systemd/system/-.slice.d/10-steamdeck-oomd.conf <<'CONF'
+[Slice]
+ManagedOOMSwap=kill
+CONF
+	write_conf /etc/systemd/system/user@.service.d/10-steamdeck-oomd.conf <<'CONF'
+[Service]
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=60%
+CONF
+	write_conf /etc/systemd/user/gamescope-session-plus@.service.d/10-steamdeck-oomd.conf <<'CONF'
+# keep the Gaming Mode compositor out of oomd's reach: the game goes first
+[Service]
+ManagedOOMPreference=avoid
+CONF
+	if have_systemd; then
+		srun systemctl daemon-reload
+		if [ "$LIVE" = 0 ] || systemctl cat systemd-oomd.service >/dev/null 2>&1; then
+			srun systemctl enable --now systemd-oomd.service
+		else
+			say "warning: systemd-oomd.service does not exist on this system; the config is in place for when it does"
+		fi
+	fi
+}
+
+action_sysctl() {
+	say "== sysctl"
+	write_conf /etc/sysctl.d/99-steamdeck-setup.conf <<CONF
+# zram is the first swap and it is fast: swap early, keep the file cache a bit longer, read one page at a time
+vm.swappiness = $SWAPPINESS
+vm.vfs_cache_pressure = 50
+vm.page-cluster = 0
+CONF
+	srun sysctl -q -p "$(P /etc/sysctl.d/99-steamdeck-setup.conf)"
+}
+
+action_ssh() {
+	say "== ssh"
+	have_systemd || { say "no systemd here"; return 0; }
+	if [ "$LIVE" = 1 ] && ! systemctl cat sshd.service >/dev/null 2>&1; then
+		say "warning: sshd.service does not exist on this system"
+		return 0
+	fi
+	srun systemctl enable --now sshd.service
+}
+
+action_swapfile() {
+	local size=$1 file=/home/swapfile free_kb need_kb
+	say "== swapfile $size"
+	case $size in [0-9]*[GgMm]) ;; *) die "swapfile SIZE looks like 8G or 16G" ;; esac
+	if [ "$LIVE" = 1 ]; then
+		[ -e "$file" ] || die "$file does not exist: this only resizes the swap file SteamOS made"
+		free_kb=$(df -Pk /home | awk 'NR==2{print $4}')
+		case $size in
+			*[Gg]) need_kb=$(( ${size%[Gg]} * 1024 * 1024 )) ;;
+			*) need_kb=$(( ${size%[Mm]} * 1024 )) ;;
+		esac
+		[ "$free_kb" -gt $(( need_kb + 5 * 1024 * 1024 )) ] || die "not enough free space on /home for $size plus 5G headroom"
+	fi
+	srun swapoff "$file"
+	srun rm -f "$file"
+	srun fallocate -l "$size" "$file"
+	srun chmod 600 "$file"
+	srun mkswap "$file"
+	srun swapon "$file"
+}
+
+action_status() {
+	say "== status"
+	local f
+	for f in /etc/systemd/oomd.conf.d/10-steamdeck.conf /etc/sysctl.d/99-steamdeck-setup.conf; do
+		if managed "$(P "$f")"; then say "present  $f"; else say "absent   $f"; fi
+	done
+	if [ "$LIVE" = 1 ]; then
+		if command -v systemctl >/dev/null; then
+			say "systemd-oomd: $(systemctl is-active systemd-oomd.service 2>/dev/null || true)"
+			say "sshd:         $(systemctl is-active sshd.service 2>/dev/null || true)"
+		fi
+		say "swappiness:   $(cat /proc/sys/vm/swappiness 2>/dev/null || echo ?)"
+		swapon --show 2>/dev/null || true
+	fi
+}
+
+action_undo() {
+	say "== undo"
+	local f
+	for f in \
+		/etc/systemd/oomd.conf.d/10-steamdeck.conf \
+		/etc/systemd/system/-.slice.d/10-steamdeck-oomd.conf \
+		/etc/systemd/system/user@.service.d/10-steamdeck-oomd.conf \
+		/etc/systemd/user/gamescope-session-plus@.service.d/10-steamdeck-oomd.conf \
+		/etc/sysctl.d/99-steamdeck-setup.conf; do
+		if managed "$(P "$f")"; then
+			if [ "$DRY" = 1 ]; then
+				say "would remove $f"
+			else
+				rm -f "$(P "$f")"
+				rmdir "$(dirname "$(P "$f")")" 2>/dev/null || true
+				say "removed $f"
+			fi
+		fi
+	done
+	if have_systemd; then srun systemctl daemon-reload; fi
+	say "sshd and the swap file are left as they are"
+}
+
+system_run() {
+	case $SWAPPINESS in ''|*[!0-9]*) die "--swappiness needs a number" ;; esac
+	[ "$SWAPPINESS" -le 200 ] || die "--swappiness must be 0..200"
+	[ ${#ACTIONS[@]} -gt 0 ] || die "--system needs an action (oom, sysctl, swapfile SIZE, ssh, all, status, undo)"
+	local a
+	for a in "${ACTIONS[@]}"; do
+		case $a in
+			oom|sysctl|ssh|all|status|undo|swapfile) ;;
+			[0-9]*[GgMm]) ;; # the size after swapfile
+			*) die "unknown action '$a' (oom, sysctl, swapfile SIZE, ssh, all, status, undo)" ;;
+		esac
+	done
+	if [ "$LIVE" = 1 ] && [ "$(id -u)" != 0 ]; then
+		command -v sudo >/dev/null || die "run as root (sudo not found)"
+		[ -n "$SELF" ] || die "the system step needs the script as a file: git clone https://github.com/$REPO && ./setup"
+		say "setup: the system step needs root, running through sudo"
+		exec sudo -- "$SELF" "${ARGS[@]}"
+	fi
+	local i=0
+	while [ $i -lt ${#ACTIONS[@]} ]; do
+		a=${ACTIONS[$i]}
+		case $a in
+			oom) action_oom ;;
+			sysctl) action_sysctl ;;
+			ssh) action_ssh ;;
+			all) action_oom; action_sysctl; action_ssh ;;
+			status) action_status ;;
+			undo) action_undo ;;
+			swapfile)
+				i=$((i + 1))
+				[ $i -lt ${#ACTIONS[@]} ] || die "swapfile needs a size (8G, 16G)"
+				action_swapfile "${ACTIONS[$i]}"
+				;;
+		esac
+		i=$((i + 1))
+	done
+}
+
+# ============================== the wizard ==============================================
 
 # ask_yn TEXT DEFAULT(y|n) -> sets YES=1/0 ; end of input takes the default
 ask_yn() {
 	local def=$2 hint ans
 	[ "$def" = y ] && hint='[Y/n]' || hint='[y/N]'
 	while :; do
-		read -rp "  $1 $hint " ans || ans=
+		printf '  %s %s ' "$1" "$hint"
+		read -r -u 3 ans || ans=
 		case ${ans:-$def} in
 			[Yy]*) YES=1; return ;;
 			[Nn]*) YES=0; return ;;
@@ -39,69 +472,110 @@ ask_yn() {
 ask_val() {
 	local ans
 	while :; do
-		read -rp "  $1 [$2] " ans || ans=
+		printf '  %s [%s] ' "$1" "$2"
+		read -r -u 3 ans || ans=
 		ans=${ans:-$2}
 		if [[ $ans =~ $3 ]]; then VAL=$ans; return; fi
 		echo "    not a valid value"
 	done
 }
 
-echo "steamdeck setup: answer a few questions; nothing changes until you confirm at the end."
-echo
+wizard() {
+	# the questions are read from the terminal even when the script itself comes through a pipe (curl | bash)
+	if [ -n "$SELF" ]; then exec 3<&0; else exec 3</dev/tty || die "no terminal to ask on"; fi
+	echo "steamdeck setup: answer a few questions; nothing changes until you confirm at the end."
+	echo
+	ask_val "1) set up   2) show what is set up   3) remove what setup did" 1 '^[123]$'
+	local mode=$VAL
+	local sys=()
+	[ -z "$SELF" ] || sys=("$SELF" --system)
+	[ "$DRY" = 0 ] || [ ${#sys[@]} -eq 0 ] || sys+=(--dry-run)
+	if [ -n "$ROOT" ] && [ ${#sys[@]} -gt 0 ]; then sys+=(--root "$ROOT"); fi
 
-echo "Programs"
-ask_yn "Install ProtonUp and Flatseal (into ~/.local/bin, with menu entries)?" y; DO_INSTALL=$YES
-DO_TIMER=0
-if [ "$DO_INSTALL" = 1 ]; then
-	ask_yn "Update Proton-GE once a week in the background?" n; DO_TIMER=$YES
-fi
+	if [ "$mode" = 2 ]; then
+		for n in "${ALL[@]}"; do
+			if [ -x "$BIN/$n" ]; then say "installed  $BIN/$n"; else say "missing    $BIN/$n"; fi
+		done
+		if [ -f "$UNITDIR/protonup-update.timer" ]; then say "timer      weekly Proton-GE update"; else say "timer      none"; fi
+		[ ${#sys[@]} -eq 0 ] || "${sys[@]}" status
+		return
+	fi
 
-echo
-echo "System (asks for your sudo password once)"
-ask_yn "OOM guard: kill the game instead of freezing the Deck when memory runs out?" y; DO_OOM=$YES
-ask_yn "Memory settings tuned for zram (swappiness, cache pressure)?" y; DO_SYSCTL=$YES
-SWAPPINESS=100
-if [ "$DO_SYSCTL" = 1 ]; then
-	ask_val "swappiness (0-200, 100 suits zram)" 100 '^([0-9]|[1-9][0-9]|1[0-9][0-9]|200)$'; SWAPPINESS=$VAL
-fi
-echo "    swap now: $(free -h 2>/dev/null | awk '/^Swap:/{print $2" total, "$3" used"}')"
-ask_val "Swap file size, e.g. 8G or 16G (Enter keeps it)" keep '^(keep|[0-9]+[GgMm])$'; SWAPSIZE=$VAL
-ask_yn "Enable ssh so you can log in from another computer?" n; DO_SSH=$YES
+	if [ "$mode" = 3 ]; then
+		ask_yn "Remove ProtonUp, Flatseal, their menu entries and the update timer?" y
+		if [ "$YES" = 1 ]; then programs_uninstall; fi
+		if [ ${#sys[@]} -gt 0 ]; then
+			ask_yn "Remove the OOM guard and memory settings this script wrote (asks sudo)?" y
+			if [ "$YES" = 1 ]; then "${sys[@]}" undo; fi
+		fi
+		return
+	fi
 
-# --- the plan -------------------------------------------------------------
-INSTALL_CMD=()
-if [ "$DO_INSTALL" = 1 ]; then
-	INSTALL_CMD=("$HERE/scripts/install" "${DRY[@]}")
-	[ -d "$HERE/dist" ] && INSTALL_CMD+=(--from "$HERE/dist")
-	[ "$DO_TIMER" = 1 ] && INSTALL_CMD+=(--timer)
-fi
-SYSTEM_CMD=()
-if [ "$DO_OOM$DO_SYSCTL$DO_SSH" != 000 ] || [ "$SWAPSIZE" != keep ]; then
-	SYSTEM_CMD=("$HERE/scripts/system" "${DRY[@]}" "${ROOTOPT[@]}")
-	[ "$DO_SYSCTL" = 1 ] && SYSTEM_CMD+=(--swappiness "$SWAPPINESS")
-	[ "$DO_OOM" = 1 ] && SYSTEM_CMD+=(oom)
-	[ "$DO_SYSCTL" = 1 ] && SYSTEM_CMD+=(sysctl)
-	[ "$SWAPSIZE" != keep ] && SYSTEM_CMD+=(swapfile "$SWAPSIZE")
-	[ "$DO_SSH" = 1 ] && SYSTEM_CMD+=(ssh)
-fi
+	echo
+	echo "Programs"
+	ask_yn "Install ProtonUp and Flatseal (into $BIN, with menu entries)?" y; local do_install=$YES
+	local do_timer=0
+	if [ "$do_install" = 1 ]; then
+		ask_yn "Update Proton-GE once a week in the background?" n; do_timer=$YES
+	fi
 
-echo
-echo "This will:"
-[ "$DO_INSTALL" = 1 ] && echo "  - install ProtonUp and Flatseal$([ "$DO_TIMER" = 1 ] && echo ', with a weekly Proton-GE update')"
-[ "$DO_OOM" = 1 ] && echo "  - set up the OOM guard (systemd-oomd)"
-[ "$DO_SYSCTL" = 1 ] && echo "  - write memory settings (swappiness $SWAPPINESS)"
-[ "$SWAPSIZE" != keep ] && echo "  - resize the swap file to $SWAPSIZE"
-[ "$DO_SSH" = 1 ] && echo "  - enable ssh"
-if [ ${#INSTALL_CMD[@]} -eq 0 ] && [ ${#SYSTEM_CMD[@]} -eq 0 ]; then
-	echo "  (nothing)"
-	exit 0
-fi
-echo
-ask_yn "Go ahead?" y
-[ "$YES" = 1 ] || { echo "cancelled, nothing changed"; exit 0; }
+	local do_oom=0 do_sysctl=0 do_ssh=0 swapsize=keep swappiness=100
+	if [ ${#sys[@]} -gt 0 ]; then
+		echo
+		echo "System (asks for your sudo password once)"
+		ask_yn "OOM guard: kill the game instead of freezing the Deck when memory runs out?" y; do_oom=$YES
+		ask_yn "Memory settings tuned for zram (swappiness, cache pressure)?" y; do_sysctl=$YES
+		if [ "$do_sysctl" = 1 ]; then
+			ask_val "swappiness (0-200, 100 suits zram)" 100 '^([0-9]|[1-9][0-9]|1[0-9][0-9]|200)$'; swappiness=$VAL
+		fi
+		echo "    swap now: $(free -h 2>/dev/null | awk '/^Swap:/{print $2" total, "$3" used"}')"
+		ask_val "Swap file size, e.g. 8G or 16G (Enter keeps it)" keep '^(keep|[0-9]+[GgMm])$'; swapsize=$VAL
+		ask_yn "Enable ssh so you can log in from another computer?" n; do_ssh=$YES
+	else
+		echo
+		echo "(the system tuning needs the script as a file: git clone https://github.com/$REPO && cd steamdeck && ./setup)"
+	fi
 
-echo
-[ ${#INSTALL_CMD[@]} -gt 0 ] && "${INSTALL_CMD[@]}"
-[ ${#SYSTEM_CMD[@]} -gt 0 ] && "${SYSTEM_CMD[@]}"
-echo
-echo "done. To undo the system part later: scripts/system undo"
+	local syscmd=()
+	if [ ${#sys[@]} -gt 0 ] && { [ "$do_oom$do_sysctl$do_ssh" != 000 ] || [ "$swapsize" != keep ]; }; then
+		syscmd=("${sys[@]}")
+		[ "$do_sysctl" = 1 ] && syscmd+=(--swappiness "$swappiness")
+		[ "$do_oom" = 1 ] && syscmd+=(oom)
+		[ "$do_sysctl" = 1 ] && syscmd+=(sysctl)
+		[ "$swapsize" != keep ] && syscmd+=(swapfile "$swapsize")
+		[ "$do_ssh" = 1 ] && syscmd+=(ssh)
+	fi
+
+	echo
+	echo "This will:"
+	[ "$do_install" = 1 ] && echo "  - install ProtonUp and Flatseal$([ "$do_timer" = 1 ] && echo ', with a weekly Proton-GE update')"
+	[ "$do_oom" = 1 ] && echo "  - set up the OOM guard (systemd-oomd)"
+	[ "$do_sysctl" = 1 ] && echo "  - write memory settings (swappiness $swappiness)"
+	[ "$swapsize" != keep ] && echo "  - resize the swap file to $swapsize"
+	[ "$do_ssh" = 1 ] && echo "  - enable ssh"
+	if [ "$do_install" = 0 ] && [ ${#syscmd[@]} -eq 0 ]; then
+		echo "  (nothing)"
+		return
+	fi
+	echo
+	ask_yn "Go ahead?" y
+	[ "$YES" = 1 ] || { echo "cancelled, nothing changed"; return; }
+
+	echo
+	if [ "$do_install" = 1 ]; then
+		TIMER=$do_timer
+		[ -z "$HERE" ] || [ ! -d "$HERE/dist" ] || [ -n "$FROM" ] || FROM=$HERE/dist
+		programs_install
+	fi
+	if [ ${#syscmd[@]} -gt 0 ]; then "${syscmd[@]}"; fi
+	echo
+	echo "done. Run ./setup again to see the state or to remove it."
+}
+
+case $MODE in
+	programs)
+		if [ "$UNINSTALL" = 1 ]; then programs_uninstall; else programs_install; fi
+		;;
+	system) system_run ;;
+	wizard) wizard ;;
+esac
