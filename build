@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# build - compile protonup and flatseal into dist/: one binary each plus SHA256SUMS.
+#
+#   ./build                  release build with the host toolchain
+#   ./build --portable       link against an old glibc with zig, so one binary runs on every SteamOS
+#   ./build --out DIR        write the files to DIR instead of ./dist
+#   ./build --publish TAG    after building, create GitHub release TAG with the files (needs gh login)
+#
+# The install script downloads these files from the latest release.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+OUT=dist
+PORTABLE=0
+PUBLISH=
+GLIBC=2.36            # SteamOS 3.5 ships glibc 2.37; anything older than that on the Deck is not supported
+TARGET=x86_64-unknown-linux-gnu
+BINS=(protonup flatseal)
+
+die() { printf 'build: %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		--portable) PORTABLE=1 ;;
+		--out) OUT=${2:?--out needs a directory}; shift ;;
+		--publish) PUBLISH=${2:?--publish needs a tag}; shift ;;
+		-h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		*) die "unknown option $1" ;;
+	esac
+	shift
+done
+
+command -v cargo >/dev/null || die "cargo not found (install Rust: https://rustup.rs)"
+
+if [ "$PORTABLE" = 1 ]; then
+	command -v zig >/dev/null || die "--portable needs zig"
+	command -v cargo-zigbuild >/dev/null || die "--portable needs cargo-zigbuild (cargo install cargo-zigbuild)"
+	rustup target add "$TARGET" >/dev/null 2>&1 || true
+	cargo zigbuild --release --target "$TARGET.$GLIBC" -p protonup -p flatseal
+	RELDIR=target/$TARGET/release
+else
+	cargo build --release -p protonup -p flatseal
+	RELDIR=target/release
+fi
+
+mkdir -p "$OUT"
+for b in "${BINS[@]}"; do
+	[ -x "$RELDIR/$b" ] || die "$RELDIR/$b was not produced"
+	install -m 755 "$RELDIR/$b" "$OUT/$b-x86_64-linux"
+done
+
+# the newest glibc symbol a binary needs, to see at a glance whether it runs on an older system
+need=
+if command -v objdump >/dev/null; then
+	for b in "${BINS[@]}"; do
+		v=$(objdump -T "$OUT/$b-x86_64-linux" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+		printf '%-10s needs glibc %s\n' "$b" "${v:-?}"
+		need=$v
+	done
+fi
+
+(cd "$OUT" && sha256sum -- *-x86_64-linux > SHA256SUMS)
+printf 'wrote %s/: %s\n' "$OUT" "$(cd "$OUT" && ls | tr '\n' ' ')"
+[ -z "$need" ] || printf 'newest glibc needed: %s (SteamOS 3.5 and later have 2.37+)\n' "$need"
+
+if [ -n "$PUBLISH" ]; then
+	command -v gh >/dev/null || die "--publish needs gh"
+	gh release create "$PUBLISH" "$OUT"/*-x86_64-linux "$OUT/SHA256SUMS" \
+		--title "$PUBLISH" --notes "protonup and flatseal $PUBLISH: single binaries for x86_64 Linux (Steam Deck). Install with the install script."
+fi
