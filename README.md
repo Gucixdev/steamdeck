@@ -9,7 +9,7 @@ two bash files: `setup` (a wizard) and `run` (build, install, start).
 | Home | tiles saying what each tab is for, Update Protons, and a warning when two Steam installs are found |
 | ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
 | Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
-| Settings | System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
+| Settings | Health check (what games like against what is set, recent crashes), Flatpak apps (uninstall, clear data, unused runtimes), Steam installs (remove one), System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
 
 The window is [iced](https://iced.rs) drawn on the GPU with a software fallback, plain Wayland/X11, rustls
 for HTTPS, pure-Rust gzip and xz.
@@ -77,7 +77,7 @@ protonup installed | remove NAME | path
 In the window, two pages: **Download Proton** (a category dropdown, then a table of that category's
 releases with Install, and remove for the installed ones; **Update Protons** on Home installs the newest
 of every kind you have) and **Proton for my games** (a table with a dropdown per game, like
-ProtonUp-Qt, across every Steam install, or one choice for all games). The per-game choice is written to Steam's `config/config.vdf` (`CompatToolMapping`); Steam
+ProtonUp-Qt, across every Steam install, or one choice for all games; Valve's own Protons are in the list, launch options per game: GameMode, MangoHud, FSR; ProtonDB ratings on request). `protonup update` (what the weekly timer runs) installs the newest of every kind you have and sends a desktop notification. Alt+1..4 switch the tabs. The per-game choice is written to Steam's `config/config.vdf` (`CompatToolMapping`); Steam
 rewrites that file when it exits, so protonup refuses to change it while Steam is running and keeps a
 `config.vdf.steamdeck-bak` of the previous file.
 

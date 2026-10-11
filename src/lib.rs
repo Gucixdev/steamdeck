@@ -20,8 +20,11 @@ pub mod sources;
 pub mod steam;
 
 // flatseal: Flatpak permission overrides and portal permissions
+pub mod flatapps;
 pub mod flatpak;
+pub mod health;
 pub mod keyfile;
 pub mod perms;
 pub mod portals;
+pub mod protondb;
 pub mod seal_gui;

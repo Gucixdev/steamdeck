@@ -326,6 +326,124 @@ pub fn runs_windows_games(tool_dir: &Path) -> bool {
     }
 }
 
+/// `userdata/<id>/config/localconfig.vdf` of every Steam account that logged in here.
+pub fn localconfig_paths(root: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(root.join("userdata")) else {
+        return Vec::new();
+    };
+    let mut v: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path().join("config/localconfig.vdf"))
+        .filter(|p| p.is_file())
+        .collect();
+    v.sort();
+    v
+}
+
+fn apps_node(items: &[(String, V)]) -> Option<&[(String, V)]> {
+    let mut cur = items;
+    for k in ["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"] {
+        match child(cur, k) {
+            Some(V::Obj(o)) => cur = o,
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+/// appid -> the launch options string set in Steam (first account that has any).
+pub fn launch_options(root: &Path) -> HashMap<u64, String> {
+    let mut out = HashMap::new();
+    for p in localconfig_paths(root) {
+        let Ok(t) = fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(items) = parse(&t) else { continue };
+        if let Some(apps) = apps_node(&items) {
+            for (k, v) in apps {
+                if let (Ok(id), V::Obj(o)) = (k.parse::<u64>(), v) {
+                    if let Some(l) = text(o, "LaunchOptions").filter(|l| !l.is_empty()) {
+                        out.entry(id).or_insert(l);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Set (or clear with `None`) the launch options of a game in every account's localconfig.vdf.
+pub fn set_launch_options(root: &Path, appid: u64, opts: Option<&str>) -> Result<(), String> {
+    set_launch_options_checked(root, appid, opts, true)
+}
+
+pub fn set_launch_options_checked(
+    root: &Path,
+    appid: u64,
+    opts: Option<&str>,
+    check_steam: bool,
+) -> Result<(), String> {
+    if check_steam && steam_running() {
+        return Err(
+            "Steam is running and would undo the change: close Steam completely first".into(),
+        );
+    }
+    let paths = localconfig_paths(root);
+    if paths.is_empty() {
+        return Err("no Steam account has logged in here yet (no localconfig.vdf)".into());
+    }
+    for path in paths {
+        let t = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut items = parse(&t).map_err(|e| format!("{}: {e}", path.display()))?;
+        {
+            let a = child_mut(&mut items, "UserLocalConfigStore");
+            let a = child_mut(a, "Software");
+            let a = child_mut(a, "Valve");
+            let a = child_mut(a, "Steam");
+            let a = child_mut(a, "apps");
+            let app = child_mut(a, &appid.to_string());
+            app.retain(|(k, _)| !k.eq_ignore_ascii_case("LaunchOptions"));
+            if let Some(o) = opts {
+                app.push(("LaunchOptions".into(), V::Str(o.into())));
+            }
+        }
+        let out = serialize(&items);
+        // verify before replacing: what we wrote must parse back to the same tree
+        if parse(&out).map(|x| x != items).unwrap_or(true) {
+            return Err("internal check failed, nothing written".into());
+        }
+        let _ = fs::copy(&path, path.with_extension("vdf.steamdeck-bak"));
+        let tmp = path.with_extension("vdf.steamdeck-tmp");
+        fs::write(&tmp, out).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Valve's own Protons (Proton 9.x, Experimental, Hotfix...) are ordinary Steam games in
+/// steamapps/common; the name Steam knows them by is in their compatibilitytool.vdf.
+pub fn valve_tools(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for lib in libraries(root) {
+        let Ok(rd) = fs::read_dir(lib.join("steamapps/common")) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if !n.starts_with("Proton") {
+                continue;
+            }
+            if let Some(t) = internal_name(&e.path()) {
+                if !out.contains(&t) {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// Use `tool` for `appid` (or the Steam default again with `None`). Writes config.vdf atomically and
 /// keeps a copy of the previous one next to it.
 pub fn set_tool(root: &Path, appid: u64, tool: Option<&str>) -> Result<(), String> {
@@ -456,6 +574,47 @@ mod tests {
             g.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
             ["Aaa Game", "Dota 2"]
         );
+    }
+
+    #[test]
+    fn launch_options_are_set_read_and_cleared_in_localconfig() {
+        let root = tmp("launch");
+        let cfg = root.join("userdata/1234/config");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(
+            cfg.join("localconfig.vdf"),
+            "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"570\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"old %command%\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            launch_options(&root).get(&570).map(String::as_str),
+            Some("old %command%")
+        );
+        set_launch_options_checked(&root, 570, Some("gamemoderun %command%"), false).unwrap();
+        set_launch_options_checked(&root, 4800, Some("mangohud %command%"), false).unwrap();
+        let m = launch_options(&root);
+        assert_eq!(
+            m.get(&570).map(String::as_str),
+            Some("gamemoderun %command%")
+        );
+        assert_eq!(m.get(&4800).map(String::as_str), Some("mangohud %command%"));
+        set_launch_options_checked(&root, 570, None, false).unwrap();
+        assert!(!launch_options(&root).contains_key(&570));
+        assert!(cfg.join("localconfig.vdf.steamdeck-bak").is_file());
+    }
+
+    #[test]
+    fn valve_protons_are_found_in_steamapps_common() {
+        let root = tmp("valve");
+        let d = root.join("steamapps/common/Proton Experimental");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("compatibilitytool.vdf"),
+            "\"compatibilitytools\"\n{\n\t\"compat_tools\"\n\t{\n\t\t\"proton_experimental\"\n\t\t{\n\t\t}\n\t}\n}\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("steamapps/common/Half-Life")).unwrap();
+        assert_eq!(valve_tools(&root), ["proton_experimental"]);
     }
 
     #[test]

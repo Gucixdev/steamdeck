@@ -231,11 +231,11 @@ DESK
 	if [ "$TIMER" = 1 ]; then
 		write_file "$UNITDIR/protonup-update.service" <<UNIT
 [Unit]
-Description=Install the newest Proton-GE
+Description=Install the newest Protons you use
 
 [Service]
 Type=oneshot
-ExecStart=$BIN/steamdeck protonup install latest
+ExecStart=$BIN/steamdeck protonup update
 UNIT
 		write_file "$UNITDIR/protonup-update.timer" <<UNIT
 [Unit]
@@ -340,6 +340,8 @@ action_sysctl() {
 vm.swappiness = $SWAPPINESS
 vm.vfs_cache_pressure = 50
 vm.page-cluster = 0
+# games and Proton map many memory areas; the old default of 65530 makes some of them crash
+vm.max_map_count = 2147483642
 CONF
 	srun sysctl -q -p "$(P /etc/sysctl.d/99-steamdeck-setup.conf)"
 }

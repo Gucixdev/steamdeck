@@ -24,6 +24,8 @@ usage:
   protonup install --all [--yes] every release of the source that is not installed yet
   protonup remove NAME           remove an installed tool (its directory name)
   protonup path                  the directory used for installs
+  protonup update                install the newest release of every kind of tool you have installed
+                                 (what the weekly timer runs; sends a desktop notification)
   protonup games                 installed games and the tool each one uses
   protonup use APPID TOOL        run a game with TOOL (a name from `installed`), or `default`; Steam must be closed
 
@@ -167,6 +169,73 @@ pub fn run(mut args: Vec<String>) -> ExitCode {
                 }
                 Err(e) => fail(e),
             }
+        }
+        "update" => {
+            let have = install::list_installed(&dir_path);
+            let mut ids: Vec<&'static str> = Vec::new();
+            for i in &have {
+                if let Some(id) = sources::family_of(&i.name) {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            if ids.is_empty() {
+                ids.push("ge");
+            }
+            let mut done: Vec<String> = Vec::new();
+            let mut failed = 0;
+            for id in ids {
+                let Some(s) = sources::find(id) else { continue };
+                let rels = match github::releases(s, 5) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("protonup: {}: {e}", s.name);
+                        failed += 1;
+                        continue;
+                    }
+                };
+                let names: Vec<String> = install::list_installed(&dir_path)
+                    .into_iter()
+                    .map(|i| i.name)
+                    .collect();
+                let Some(rel) = rels.iter().find(|r| r.archive(s).is_some()) else {
+                    continue;
+                };
+                if names.contains(&rel.dir_name(s)) {
+                    say!(
+                        "{}: {} is the newest and is installed",
+                        s.name,
+                        rel.tag_name
+                    );
+                    continue;
+                }
+                say!("{}: installing {}", s.name, rel.tag_name);
+                match install::install(s, rel, &dir_path, &mut |_| {}) {
+                    Ok(_) => done.push(rel.tag_name.clone()),
+                    Err(e) => {
+                        eprintln!("protonup: {}: {e}", rel.tag_name);
+                        failed += 1;
+                    }
+                }
+            }
+            crate::log::write(
+                "protonup",
+                &format!("update: installed {:?}, {failed} failed", done),
+            );
+            if !done.is_empty() {
+                say!("installed: {}", done.join(", "));
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "Proton updated",
+                        &format!("{} installed. Restart Steam to use it.", done.join(", ")),
+                    ])
+                    .status();
+            }
+            if failed > 0 {
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
         }
         "installed" => {
             let l = install::list_installed(&dir_path);

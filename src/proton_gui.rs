@@ -32,6 +32,12 @@ pub enum Msg {
     GameFilter(String),
     /// every Steam install found, with its tools, games and per-game choices
     All(Vec<RootInfo>),
+    /// Steam root, appid, launch options ("" = none)
+    SetLaunch(PathBuf, u64, String),
+    LaunchSet(Result<(), String>),
+    /// ask protondb.com for the ratings of the listed games (on request only)
+    CheckDb,
+    DbDone(HashMap<u64, String>),
     /// Steam root, appid, tool name ("" = Steam default)
     SetTool(PathBuf, u64, String),
     ToolSet(Result<(), String>),
@@ -60,30 +66,11 @@ pub struct RootInfo {
     root: PathBuf,
     tools: PathBuf,
     installed: Vec<Installed>,
+    /// Valve's own Protons from steamapps/common
+    valve: Vec<String>,
     games: Vec<Game>,
     mapping: HashMap<u64, String>,
-}
-
-/// Which source a directory name belongs to, for "update all".
-fn family(name: &str) -> Option<&'static str> {
-    let n = name.to_lowercase();
-    if n.starts_with("ge-proton") {
-        Some("ge")
-    } else if n.starts_with("proton-cachyos") {
-        Some(if n.contains("v3") {
-            "cachyos-v3"
-        } else {
-            "cachyos"
-        })
-    } else if n.contains("sarek") {
-        Some("sarek")
-    } else if n.contains("northstar") {
-        Some("northstar")
-    } else if n.contains("luxtorpeda") {
-        Some("luxtorpeda")
-    } else {
-        None
-    }
+    launch: HashMap<u64, String>,
 }
 
 fn root_label(root: &std::path::Path) -> String {
@@ -101,8 +88,10 @@ fn scan_root(tools: PathBuf) -> RootInfo {
     RootInfo {
         label: root_label(&root),
         installed: install::list_installed(&tools),
+        valve: games::valve_tools(&root),
         games: games::games(&root),
         mapping: games::mapping(&root),
+        launch: games::launch_options(&root),
         root,
         tools,
     }
@@ -148,6 +137,8 @@ pub struct App {
     confirm_all: bool,
     all: Vec<RootInfo>,
     game_filter: String,
+    protondb: HashMap<u64, String>,
+    db_busy: bool,
 }
 
 impl App {
@@ -186,6 +177,8 @@ impl App {
             confirm_all: false,
             all: Vec::new(),
             game_filter: String::new(),
+            protondb: crate::protondb::cached(),
+            db_busy: false,
         };
         let t = Task::batch([app.fetch_page(1), app.load_all()]);
         (app, t)
@@ -244,7 +237,7 @@ impl App {
                 self.notice = Some("Checking for newer Protons...".into());
                 let mut ids: Vec<&'static str> = Vec::new();
                 for i in &self.installed {
-                    if let Some(id) = family(&i.name) {
+                    if let Some(id) = sources::family_of(&i.name) {
                         if !ids.contains(&id) {
                             ids.push(id);
                         }
@@ -296,6 +289,49 @@ impl App {
                     self.installed = r.installed.clone();
                 }
                 self.all = v;
+            }
+            Msg::SetLaunch(root, appid, opts) => {
+                self.error = None;
+                self.notice = None;
+                return Task::perform(
+                    async move {
+                        let o = if opts.is_empty() {
+                            None
+                        } else {
+                            Some(opts.as_str())
+                        };
+                        games::set_launch_options(&root, appid, o)
+                    },
+                    Msg::LaunchSet,
+                );
+            }
+            Msg::LaunchSet(r) => match r {
+                Ok(()) => {
+                    self.notice = Some(
+                        "Saved. The launch options apply the next time the game starts.".into(),
+                    );
+                    return self.load_all();
+                }
+                Err(e) => self.error = Some(e),
+            },
+            Msg::CheckDb => {
+                if self.db_busy {
+                    return Task::none();
+                }
+                self.db_busy = true;
+                let ids: Vec<u64> = self
+                    .all
+                    .iter()
+                    .flat_map(|r| r.games.iter().map(|g| g.appid))
+                    .collect();
+                return Task::perform(
+                    async move { crate::protondb::fetch_missing(&ids) },
+                    Msg::DbDone,
+                );
+            }
+            Msg::DbDone(m) => {
+                self.db_busy = false;
+                self.protondb = m;
             }
             Msg::SetTool(root, appid, tool) => {
                 self.error = None;
@@ -567,7 +603,35 @@ impl App {
                 .padding(10)
                 .size(SMALL_SIZE),
         );
-        col = col.push(table_header(&[("Game", 4), ("Steam", 2), ("Proton", 3)]));
+        let db_label = if self.db_busy {
+            "Asking protondb.com..."
+        } else {
+            "Check ProtonDB ratings"
+        };
+        let db_btn = button(text(db_label).size(SMALL_SIZE))
+            .padding([6, 12])
+            .style(quiet_button());
+        col = col.push(
+            row![
+                text("Pick the Proton and the launch options per game.")
+                    .size(SMALL_SIZE)
+                    .color(DIM)
+                    .width(Fill),
+                if self.db_busy {
+                    db_btn
+                } else {
+                    db_btn.on_press(Msg::CheckDb)
+                },
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+        col = col.push(table_header(&[
+            ("Game", 3),
+            ("Steam", 1),
+            ("ProtonDB", 2),
+            ("Proton", 4),
+            ("Launch options", 3),
+        ]));
         const DEFAULT: &str = "Steam default";
         let q = self.game_filter.to_lowercase();
         let mut n = 0usize;
@@ -591,6 +655,13 @@ impl App {
                 let cur = r.mapping.get(&appid).cloned();
                 let mut options: Vec<String> = vec![DEFAULT.to_string()];
                 options.extend(r.installed.iter().map(|i| i.tool.clone()));
+                options.extend(
+                    r.valve
+                        .iter()
+                        .filter(|v| !options.contains(v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
                 if let Some(c) = &cur {
                     if !options.contains(c) {
                         options.push(c.clone());
@@ -608,11 +679,61 @@ impl App {
                 .text_size(SMALL_SIZE)
                 .padding(8)
                 .width(Fill);
+                // launch options: presets for the things that matter on a Deck, or what is set already
+                const PRESETS: [(&str, &str); 5] = [
+                    ("none", ""),
+                    ("GameMode", "gamemoderun %command%"),
+                    ("MangoHud overlay", "mangohud %command%"),
+                    ("FSR upscaling", "WINE_FULLSCREEN_FSR=1 %command%"),
+                    ("FSR + MangoHud", "WINE_FULLSCREEN_FSR=1 mangohud %command%"),
+                ];
+                let cur_l = r.launch.get(&appid).cloned().unwrap_or_default();
+                let mut l_opts: Vec<String> = PRESETS.iter().map(|(n, _)| n.to_string()).collect();
+                let l_sel = match PRESETS.iter().find(|(_, v)| *v == cur_l) {
+                    Some((n, _)) => n.to_string(),
+                    None => {
+                        let c = format!("custom: {cur_l}");
+                        l_opts.push(c.clone());
+                        c
+                    }
+                };
+                let root2 = r.root.clone();
+                let launch_dd = pick_list(l_opts, Some(l_sel), move |n| {
+                    let v = PRESETS
+                        .iter()
+                        .find(|(p, _)| *p == n)
+                        .map(|(_, v)| v.to_string());
+                    match v {
+                        Some(v) => Msg::SetLaunch(root2.clone(), appid, v),
+                        None => Msg::Tab(Tab::Games), // picking the "custom" line again changes nothing
+                    }
+                })
+                .text_size(SMALL_SIZE)
+                .padding(8)
+                .width(Fill);
+                let tier = self.protondb.get(&appid).cloned();
+                let tier_text: Element<Msg> = match tier.as_deref() {
+                    Some(t) => {
+                        let c = match t {
+                            "platinum" => ACCENT,
+                            "gold" => AMBER,
+                            "borked" => RED,
+                            _ => DIM,
+                        };
+                        text(t.to_string()).size(SMALL_SIZE).color(c).into()
+                    }
+                    None => text(if appid == 0 { "" } else { "-" })
+                        .size(SMALL_SIZE)
+                        .color(DIM)
+                        .into(),
+                };
                 col = col.push(table_row(
                     vec![
-                        (text(name).size(TEXT_SIZE).into(), 4),
-                        (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 2),
-                        (dropdown.into(), 3),
+                        (text(name).size(TEXT_SIZE).into(), 3),
+                        (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 1),
+                        (tier_text, 2),
+                        (dropdown.into(), 4),
+                        (launch_dd.into(), 3),
                     ],
                     n % 2 == 1,
                 ));

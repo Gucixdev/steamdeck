@@ -107,6 +107,28 @@ pub fn default_source() -> &'static Source {
     &SOURCES[0]
 }
 
+/// Which source a directory name belongs to, for "update all".
+pub fn family_of(name: &str) -> Option<&'static str> {
+    let n = name.to_lowercase();
+    if n.starts_with("ge-proton") {
+        Some("ge")
+    } else if n.starts_with("proton-cachyos") {
+        Some(if n.contains("v3") {
+            "cachyos-v3"
+        } else {
+            "cachyos"
+        })
+    } else if n.contains("sarek") {
+        Some("sarek")
+    } else if n.contains("northstar") {
+        Some("northstar")
+    } else if n.contains("luxtorpeda") {
+        Some("luxtorpeda")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

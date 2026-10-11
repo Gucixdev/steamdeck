@@ -67,7 +67,7 @@ teardown() { rm -rf "$T"; }
 @test "--timer writes the weekly update unit" {
 	run "$ROOT/setup" --programs --from "$DIST" --prefix "$T/p" --timer
 	[ "$status" -eq 0 ]
-	grep -q "^ExecStart=$T/p/bin/steamdeck protonup install latest$" "$T/home/.config/systemd/user/protonup-update.service"
+	grep -q "^ExecStart=$T/p/bin/steamdeck protonup update$" "$T/home/.config/systemd/user/protonup-update.service"
 	grep -q '^OnCalendar=weekly$' "$T/home/.config/systemd/user/protonup-update.timer"
 }
 

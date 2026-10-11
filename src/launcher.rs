@@ -4,7 +4,7 @@ use crate::ui::{
     accent_button, card, nav_item, page_title, quiet_button, shell, theme, warning_card, ACCENT,
     PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use crate::{log, proton_gui, seal_gui, steaminstalls, system};
+use crate::{flatapps, health, log, proton_gui, seal_gui, steaminstalls, system};
 use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
@@ -19,6 +19,8 @@ pub enum Section {
     Perms,
     System,
     Steam,
+    Apps,
+    Health,
     Log,
 }
 
@@ -42,7 +44,10 @@ enum Msg {
     Seal(seal_gui::Msg),
     System(system::Msg),
     Steam(steaminstalls::Msg),
+    Apps(flatapps::Msg),
+    Health(health::Msg),
     RefreshLog,
+    Key(iced::keyboard::Key, iced::keyboard::Modifiers),
 }
 
 struct App {
@@ -51,6 +56,8 @@ struct App {
     seal: seal_gui::App,
     system: system::State,
     steam: steaminstalls::State,
+    apps: flatapps::State,
+    health: health::State,
     seen: [Option<String>; 2],
 }
 
@@ -59,6 +66,14 @@ pub fn run(start: Start) -> iced::Result {
     log::write("launcher", "start");
     iced::application(move || App::new(start.clone()), App::update, App::view)
         .title("Steam Deck")
+        .subscription(|_: &App| {
+            iced::keyboard::listen().filter_map(|e| match e {
+                iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                    Some(Msg::Key(key, modifiers))
+                }
+                _ => None,
+            })
+        })
         .theme(|_: &App| theme())
         .window_size((1100.0, 700.0))
         .run()
@@ -73,6 +88,8 @@ impl App {
         let (seal, st) = seal_gui::App::new(start.app.clone());
         let (system, yt) = system::State::new();
         let (steam, wt) = steaminstalls::State::new();
+        let (apps, at) = flatapps::State::new();
+        let (health, ht) = health::State::new();
         let section = match (start.section, start.tab.as_deref()) {
             (Section::Games, Some("available")) => Section::Get,
             (Section::Games, Some("installed")) => Section::Installed,
@@ -84,6 +101,8 @@ impl App {
             seal,
             system,
             steam,
+            apps,
+            health,
             seen: [None, None],
         };
         (
@@ -92,6 +111,8 @@ impl App {
                 pt.map(Msg::Proton),
                 st.map(Msg::Seal),
                 yt.map(Msg::System),
+                at.map(Msg::Apps),
+                ht.map(Msg::Health),
                 wt.map(Msg::Steam),
             ]),
         )
@@ -125,7 +146,25 @@ impl App {
             Msg::Seal(m) => self.seal.update(m).map(Msg::Seal),
             Msg::System(m) => self.system.update(m).map(Msg::System),
             Msg::Steam(m) => self.steam.update(m).map(Msg::Steam),
+            Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
+            Msg::Health(m) => self.health.update(m).map(Msg::Health),
             Msg::RefreshLog => Task::none(),
+            // Alt+1..4 switch the tabs (plain digits would land in the text boxes)
+            Msg::Key(key, mods) => {
+                if mods.alt() {
+                    let go = match key.as_ref() {
+                        iced::keyboard::Key::Character("1") => Some(Section::Home),
+                        iced::keyboard::Key::Character("2") => Some(Section::Games),
+                        iced::keyboard::Key::Character("3") => Some(Section::Perms),
+                        iced::keyboard::Key::Character("4") => Some(Section::System),
+                        _ => None,
+                    };
+                    if let Some(s) = go {
+                        return self.update(Msg::Go(s));
+                    }
+                }
+                Task::none()
+            }
         };
         // errors shown in a section also go to the log file, once each
         for (i, (who, e)) in [
@@ -156,7 +195,7 @@ impl App {
         let in_seal = self.section == Section::Perms;
         let in_settings = matches!(
             self.section,
-            Section::System | Section::Steam | Section::Log
+            Section::System | Section::Steam | Section::Apps | Section::Health | Section::Log
         );
         let top_tab = |label: &'static str, goto: Section, on: bool| {
             let b = button(text(label).size(TEXT_SIZE))
@@ -194,6 +233,8 @@ impl App {
             Some(
                 column![
                     nav("System tweaks", Section::System),
+                    nav("Health check", Section::Health),
+                    nav("Flatpak apps", Section::Apps),
                     nav("Steam installs", Section::Steam),
                     nav("Log", Section::Log)
                 ]
@@ -246,6 +287,18 @@ impl App {
             Section::Steam => column![
                 page_title("Settings: Steam installs", "Flatpak and system Steam side by side; remove the one you do not use."),
                 self.steam.view().map(Msg::Steam),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::Apps => column![
+                page_title("Settings: Flatpak apps", "Uninstall apps, delete what they keep, and free unused runtimes."),
+                self.apps.view().map(Msg::Apps),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::Health => column![
+                page_title("Settings: health check", "Read only. Fix what is marked with System tweaks."),
+                self.health.view().map(Msg::Health),
             ]
             .spacing(SPACING)
             .into(),
