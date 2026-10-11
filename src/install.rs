@@ -2,7 +2,7 @@
 use crate::github::{agent, checksum_for, Release};
 use crate::sources::{DirName, Source};
 use flate2::read::GzDecoder;
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha256, Sha512};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -128,15 +128,16 @@ impl Drop for Cleanup {
 }
 
 /// Download `url` into `part`, continuing what is already there when the server honours `Range`.
-/// Returns the SHA-512 (hex) of the complete file.
+/// Returns the SHA-512 and the SHA-256 (hex) of the complete file; projects publish one or the other.
 fn pull(
     url: &str,
     part: &Path,
     size_hint: u64,
     progress: &mut dyn FnMut(Progress),
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     let mut have = fs::metadata(part).map(|m| m.len()).unwrap_or(0);
     let mut hasher = Sha512::new();
+    let mut hasher256 = Sha256::new();
     let mut buf = vec![0u8; 256 * 1024];
     let mut resp = None;
     if have > 0 {
@@ -157,6 +158,7 @@ fn pull(
                 break;
             }
             hasher.update(&buf[..n]);
+            hasher256.update(&buf[..n]);
         }
     }
     let resp = match resp {
@@ -191,6 +193,7 @@ fn pull(
             break;
         }
         hasher.update(&buf[..n]);
+        hasher256.update(&buf[..n]);
         out.write_all(&buf[..n])
             .map_err(|e| format!("write: {e}"))?;
         done += n as u64;
@@ -204,11 +207,8 @@ fn pull(
         done,
         total: total.max(done),
     });
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    let hex = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    Ok((hex(&hasher.finalize()), hex(&hasher256.finalize())))
 }
 
 /// What happened to the checksum of an install, for the interface to show.
@@ -264,7 +264,7 @@ pub fn install(
             let text = r.body_mut().read_to_string().map_err(|e| e.to_string())?;
             Some(
                 checksum_for(&text, &archive.name)
-                    .ok_or("no valid SHA-512 for the archive in the checksum file")?,
+                    .ok_or("no valid SHA-256 or SHA-512 for the archive in the checksum file")?,
             )
         }
         None => None,
@@ -291,11 +291,13 @@ pub fn install(
 
     if let Some(expected) = &expected {
         progress(Progress::Phase("verifying".into()));
-        if &got != expected {
+        // a 64-digit checksum is SHA-256, a 128-digit one SHA-512
+        let mine = if expected.len() == 64 { &got.1 } else { &got.0 };
+        if mine != expected {
             return Err(format!(
                 "checksum mismatch: expected {}..., got {}...",
                 &expected[..16],
-                &got[..16]
+                &mine[..16]
             ));
         }
     }
@@ -867,5 +869,48 @@ mod tests {
             assert!(install(ge(), &rel, &dir, &mut |_| {}).is_err());
         }
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+    }
+    #[test]
+    fn a_sha256_checksum_is_accepted_and_a_wrong_one_installs_nothing() {
+        use sha2::Sha256;
+        let src = find("em").unwrap();
+        let data = make_xz_archive("proton-EM-10.0-1");
+        let good: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let mk = |sum: &str| {
+            let base = serve(vec![
+                ("/proton-EM-10.0-1.tar.xz".into(), data.clone()),
+                (
+                    "/proton-EM-10.0-1.sha256sum".into(),
+                    format!("{sum}  proton-EM-10.0-1.tar.xz\n").into_bytes(),
+                ),
+            ]);
+            Release {
+                tag_name: "EM-10.0-1".into(),
+                published_at: String::new(),
+                prerelease: false,
+                assets: vec![
+                    Asset {
+                        name: "proton-EM-10.0-1.tar.xz".into(),
+                        browser_download_url: format!("{base}/proton-EM-10.0-1.tar.xz"),
+                        size: 0,
+                    },
+                    Asset {
+                        name: "proton-EM-10.0-1.sha256sum".into(),
+                        browser_download_url: format!("{base}/proton-EM-10.0-1.sha256sum"),
+                        size: 0,
+                    },
+                ],
+            }
+        };
+        let dir = tmp("sha256");
+        let bad = install(src, &mk(&"0".repeat(64)), &dir, &mut |_| {}).unwrap_err();
+        assert!(bad.contains("checksum mismatch"), "{bad}");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0);
+        let o = install(src, &mk(&good), &dir, &mut |_| {}).unwrap();
+        assert!(o.verified);
+        assert!(dir.join("proton-EM-10.0-1/compatibilitytool.vdf").is_file());
     }
 }

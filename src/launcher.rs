@@ -4,7 +4,9 @@ use crate::ui::{
     accent_button, card_busy, nav_item, page_title, quiet_button, shell, theme, warning_card,
     ACCENT, PAD, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use crate::{flatapps, health, log, proton_gui, seal_gui, steaminstalls, storage_gui, system};
+use crate::{
+    flatapps, health, log, proton_gui, scripts, seal_gui, steaminstalls, storage_gui, system,
+};
 use iced::widget::{button, column, container, scrollable, text};
 use iced::{Element, Fill, Task};
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ pub enum Section {
     System,
     Steam,
     Apps,
+    Scripts,
     Health,
     Log,
 }
@@ -57,6 +60,7 @@ enum Msg {
     Steam(steaminstalls::Msg),
     Apps(flatapps::Msg),
     Health(health::Msg),
+    Scripts(scripts::Msg),
     Storage(storage_gui::Msg),
     RefreshLog,
     Key(iced::keyboard::Key, iced::keyboard::Modifiers),
@@ -71,6 +75,7 @@ struct App {
     steam: steaminstalls::State,
     apps: flatapps::State,
     health: health::State,
+    scripts: scripts::State,
     storage: storage_gui::State,
     seen: [Option<String>; 2],
     tick: usize,
@@ -91,7 +96,7 @@ pub fn run(start: Start) -> iced::Result {
                 _ => None,
             });
             // the spinner and the clocks only tick while something runs
-            if app.proton.is_busy() || app.apps.is_updating() {
+            if app.proton.is_busy() || app.apps.is_updating() || app.scripts.is_running() {
                 iced::Subscription::batch([keys, iced::window::frames().map(|_| Msg::Tick)])
             } else {
                 keys
@@ -127,6 +132,7 @@ impl App {
             steam,
             apps,
             health,
+            scripts: scripts::State::new(),
             storage,
             seen: [None, None],
             tick: 0,
@@ -188,6 +194,7 @@ impl App {
             Msg::Steam(m) => self.steam.update(m).map(Msg::Steam),
             Msg::Apps(m) => self.apps.update(m).map(Msg::Apps),
             Msg::Health(m) => self.health.update(m).map(Msg::Health),
+            Msg::Scripts(m) => self.scripts.update(m).map(Msg::Scripts),
             Msg::Storage(m) => self.storage.update(m).map(Msg::Storage),
             Msg::RefreshLog => Task::none(),
             Msg::Tick => {
@@ -243,7 +250,12 @@ impl App {
         let in_seal = self.section == Section::Perms;
         let in_settings = matches!(
             self.section,
-            Section::System | Section::Steam | Section::Apps | Section::Health | Section::Log
+            Section::System
+                | Section::Steam
+                | Section::Apps
+                | Section::Scripts
+                | Section::Health
+                | Section::Log
         );
         let top_tab = |label: &'static str, goto: Section, on: bool| {
             let b = button(text(label).size(TEXT_SIZE))
@@ -282,6 +294,7 @@ impl App {
             Some(
                 column![
                     nav("System tweaks", Section::System),
+                    nav("Scripts", Section::Scripts),
                     nav("Health check", Section::Health),
                     nav("Flatpak apps", Section::Apps),
                     nav("Steam installs", Section::Steam),
@@ -377,6 +390,12 @@ impl App {
             Section::Storage => column![
                 page_title("Game storage", "Prefixes and shader caches. A game that will not start often needs its prefix reset; leftovers of removed games can go."),
                 self.storage.view().map(Msg::Storage),
+            ]
+            .spacing(SPACING)
+            .into(),
+            Section::Scripts => column![
+                page_title("Settings: scripts", "Run a script and see what it prints. Your own scripts go in the folder shown below."),
+                self.scripts.view(self.tick).map(Msg::Scripts),
             ]
             .spacing(SPACING)
             .into(),

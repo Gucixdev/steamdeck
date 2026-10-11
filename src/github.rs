@@ -48,6 +48,11 @@ impl Release {
             format!("{}.sha512", archive.name),
             format!("{stem}.sha512sum"),
             format!("{stem}.sha512"),
+            // some projects publish SHA-256 instead (Proton-EM)
+            format!("{}.sha256sum", archive.name),
+            format!("{}.sha256", archive.name),
+            format!("{stem}.sha256sum"),
+            format!("{stem}.sha256"),
         ];
         names
             .iter()
@@ -149,10 +154,11 @@ pub fn releases(src: &Source, max: usize) -> Result<Vec<Release>, String> {
     Ok(out)
 }
 
-/// Parse `<hex>  <file>` lines of a checksum file and return the SHA-512 for `file`. A file with a
+/// Parse `<hex>  <file>` lines of a checksum file and return the SHA-256 or SHA-512 for `file`. A file with a
 /// single entry is trusted for the archive even when its name differs (projects rename on upload).
 pub fn checksum_for(text: &str, file: &str) -> Option<String> {
-    let valid = |h: &str| h.len() == 128 && h.chars().all(|c| c.is_ascii_hexdigit());
+    let valid =
+        |h: &str| (h.len() == 128 || h.len() == 64) && h.chars().all(|c| c.is_ascii_hexdigit());
     let mut entries: Vec<(String, Option<String>)> = Vec::new();
     for line in text.lines() {
         let mut it = line.split_whitespace();
@@ -314,5 +320,21 @@ mod tests {
         assert_eq!(v[0].assets[0].size, 0);
         assert!(!v[0].prerelease);
         assert!(SOURCES.len() >= 5);
+    }
+    #[test]
+    fn test_builds_of_proton_em_are_not_offered() {
+        let src = crate::sources::find("em").unwrap();
+        let mk = |n: &str| Release {
+            tag_name: n.into(),
+            published_at: String::new(),
+            prerelease: false,
+            assets: vec![Asset {
+                name: format!("proton-{n}.tar.xz"),
+                browser_download_url: String::new(),
+                size: 1,
+            }],
+        };
+        assert!(mk("EM-10.0-37-HDR").archive(src).is_some());
+        assert!(mk("EM-10.0-36-HDRTEST").archive(src).is_none());
     }
 }

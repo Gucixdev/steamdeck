@@ -9,7 +9,7 @@ two bash files: `setup` (a wizard) and `run` (build, install, start).
 | Home | tiles saying what each tab is for, Update Protons, and a warning when two Steam installs are found |
 | ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
 | Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
-| Settings | Health check (what games like against what is set, recent crashes), Flatpak apps (uninstall, clear data, unused runtimes), Steam installs (remove one), System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
+| Settings | Scripts (your own scripts and three read-only ones, with their output), Health check (what games like against what is set, recent crashes), Flatpak apps (uninstall, clear data, unused runtimes), Steam installs (remove one), System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
 
 The window is [iced](https://iced.rs) drawn on the GPU with a software fallback, plain Wayland/X11, rustls
 for HTTPS, pure-Rust gzip and xz.
@@ -72,6 +72,7 @@ protonup installed | remove NAME | path
 | `rtsp` | Proton-GE RTSP, for games that play video through GStreamer RTSP |
 | `sarek` | Proton-Sarek, for older GPUs and Vulkan drivers |
 | `northstar` | NorthstarProton, for the Titanfall 2 Northstar client |
+| `em` | Proton-EM: development-oriented Proton (HDR, Wayland driver, FSR4); releases from BananaWorks07/Proton, SHA-256 checked |
 | `luxtorpeda` | runs the native Linux engine of a game instead of its Windows build |
 
 In the window, two pages: **Download Proton** (a category dropdown, then a table of that category's

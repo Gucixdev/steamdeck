@@ -353,6 +353,28 @@ CONF
 	srun sysctl -q -p "$(P /etc/sysctl.d/99-steamdeck-setup.conf)"
 }
 
+action_trim() {
+	say "== trim"
+	have_systemd || { say "no systemd here"; return 0; }
+	if [ "$LIVE" = 1 ] && ! systemctl cat fstrim.timer >/dev/null 2>&1; then
+		say "warning: fstrim.timer does not exist on this system"
+		return 0
+	fi
+	srun systemctl enable --now fstrim.timer
+}
+
+action_coredump() {
+	say "== coredump"
+	write_conf /etc/systemd/coredump.conf.d/10-steamdeck.conf <<'CONF'
+# A crashing game can leave a core dump of several gigabytes; keep only the journal entry.
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+CONF
+	have_systemd && srun systemctl daemon-reload
+	return 0
+}
+
 action_ssh() {
 	say "== ssh"
 	have_systemd || { say "no systemd here"; return 0; }
@@ -408,6 +430,7 @@ action_undo() {
 		/etc/systemd/system/-.slice.d/10-steamdeck-oomd.conf \
 		/etc/systemd/system/user@.service.d/10-steamdeck-oomd.conf \
 		/etc/systemd/user/gamescope-session-plus@.service.d/10-steamdeck-oomd.conf \
+		/etc/systemd/coredump.conf.d/10-steamdeck.conf \
 		/etc/sysctl.d/99-steamdeck-setup.conf; do
 		if managed "$(P "$f")"; then
 			if [ "$DRY" = 1 ]; then
@@ -430,7 +453,7 @@ system_run() {
 	local a
 	for a in "${ACTIONS[@]}"; do
 		case $a in
-			oom|sysctl|ssh|all|status|undo|swapfile) ;;
+			oom|sysctl|ssh|trim|coredump|all|status|undo|swapfile) ;;
 			[0-9]*[GgMm]) ;; # the size after swapfile
 			*) die "unknown action '$a' (oom, sysctl, swapfile SIZE, ssh, all, status, undo)" ;;
 		esac
@@ -450,6 +473,8 @@ system_run() {
 			oom) action_oom ;;
 			sysctl) action_sysctl ;;
 			ssh) action_ssh ;;
+			trim) action_trim ;;
+			coredump) action_coredump ;;
 			all) action_oom; action_sysctl; action_ssh ;;
 			status) action_status ;;
 			undo) action_undo ;;

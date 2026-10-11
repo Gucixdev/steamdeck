@@ -22,6 +22,7 @@ fn main() -> ExitCode {
                 let section = match other {
                     Some("steam") => steamdeck::launcher::Section::Steam,
                     Some("apps") => steamdeck::launcher::Section::Apps,
+                    Some("scripts") => steamdeck::launcher::Section::Scripts,
                     Some("storage") => steamdeck::launcher::Section::Storage,
                     Some("health") => steamdeck::launcher::Section::Health,
                     Some("system") | Some("settings") => steamdeck::launcher::Section::System,

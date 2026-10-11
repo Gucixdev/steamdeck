@@ -17,6 +17,8 @@ pub enum Msg {
     /// the permission-store entries of an app (app id, entries or the error)
     Grants(String, Result<Vec<Grant>, String>),
     Portal(usize, Answer),
+    /// the permission-store entries of every installed app, for the "All apps" view
+    GlobalGrants(Vec<Vec<Grant>>),
     Revoke(String, String),
     Search(String),
     Toggle(&'static str, &'static str, Tri),
@@ -54,6 +56,7 @@ pub struct App {
     confirm_reset: bool,
     loading: bool,
     grants: Vec<Grant>,
+    global_grants: Vec<Vec<Grant>>,
 }
 
 /// What the list shows for a permission name; the real name stays in the override file. The sound
@@ -105,6 +108,7 @@ impl App {
             confirm_reset: false,
             loading: false,
             grants: Vec::new(),
+            global_grants: Vec::new(),
         }
     }
 
@@ -120,7 +124,11 @@ impl App {
 
     fn load_grants(&self) -> Task<Msg> {
         if self.selected == GLOBAL {
-            return Task::none();
+            let ids: Vec<String> = self.apps.iter().map(|a| a.id.clone()).collect();
+            return Task::perform(
+                async move { ids.iter().map(|id| portals::grants(id)).collect::<Vec<_>>() },
+                Msg::GlobalGrants,
+            );
         }
         let app = self.selected.clone();
         Task::perform(
@@ -154,6 +162,7 @@ impl App {
                     }
                 }
             }
+            Msg::GlobalGrants(g) => self.global_grants = g,
             Msg::Portal(i, a) if self.selected == GLOBAL => {
                 // there is no global portal setting: apply it to every installed app
                 let ids: Vec<String> = self.apps.iter().map(|a| a.id.clone()).collect();
@@ -165,16 +174,17 @@ impl App {
                                 failed.push(format!("{id}: {e}"));
                             }
                         }
-                        (
-                            GLOBAL.to_string(),
-                            if failed.is_empty() {
-                                Ok(Vec::new())
-                            } else {
-                                Err(failed.join("; "))
-                            },
-                        )
+                        let all: Vec<Vec<Grant>> =
+                            ids.iter().map(|id| portals::grants(id)).collect();
+                        (all, failed)
                     },
-                    |(a, r)| Msg::Grants(a, r),
+                    |(all, failed)| {
+                        if failed.is_empty() {
+                            Msg::GlobalGrants(all)
+                        } else {
+                            Msg::Grants(GLOBAL.to_string(), Err(failed.join("; ")))
+                        }
+                    },
                 );
             }
             Msg::Portal(i, a) => {
@@ -407,8 +417,25 @@ impl App {
                 .color(ACCENT),
             );
             for (i, p) in PORTALS.iter().enumerate() {
-                let a = portals::answer(&self.grants, p);
+                // for one app: its answer. For "All apps": the common answer, or none when they differ
+                let (a, mixed) = if self.selected == GLOBAL {
+                    let answers: Vec<Answer> = self
+                        .global_grants
+                        .iter()
+                        .map(|g| portals::answer(g, p))
+                        .collect();
+                    match answers.first() {
+                        Some(first) if answers.iter().all(|x| x == first) => (*first, false),
+                        Some(_) => (Answer::Default, true),
+                        None => (Answer::Default, false),
+                    }
+                } else {
+                    (portals::answer(&self.grants, p), false)
+                };
                 let pick = |label: &'static str, v: Answer| {
+                    if mixed {
+                        return segment(label, false, false, Msg::Portal(i, v));
+                    }
                     segment(label, a == v, v == Answer::No, Msg::Portal(i, v))
                 };
                 right = right.push(

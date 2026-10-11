@@ -38,6 +38,17 @@ pub const SOURCES: &[Source] = &[
         about: "GloriousEggroll's Proton with extra patches and media codecs. The usual pick.",
     },
     Source {
+        id: "em",
+        name: "Proton-EM",
+        repo: "BananaWorks07/Proton",
+        suffix: ".tar.xz",
+        // test builds are published as ordinary releases; they are not offered
+        exclude: &["test"],
+        dir: DirName::ArchiveStem,
+        checksum: true,
+        about: "Proton-EM: development-oriented Proton with extra patches (HDR, Wayland driver, FSR4). Releases come from the BananaWorks07/Proton repository.",
+    },
+    Source {
         id: "cachyos",
         name: "Proton-CachyOS",
         repo: "CachyOS/proton-cachyos",
@@ -113,6 +124,8 @@ pub fn family_of(name: &str) -> Option<&'static str> {
     // the RTSP builds are named like GE builds but are their own line: never mix them
     if n.contains("rtsp") {
         Some("rtsp")
+    } else if n.starts_with("proton-em") {
+        Some("em")
     } else if n.starts_with("ge-proton") {
         Some("ge")
     } else if n.starts_with("proton-cachyos") {

@@ -127,3 +127,13 @@ teardown() { rm -rf "$T"; }
 		[[ "$output" != *"+ rm"* ]]
 	done
 }
+
+@test "trim and coredump are accepted, write only their own file and are undone by undo" {
+	run "$ROOT/setup" --system --root "$T" trim coredump
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"enable --now fstrim.timer"* ]]
+	grep -q '^Storage=none$' "$T/etc/systemd/coredump.conf.d/10-steamdeck.conf"
+	head -1 "$T/etc/systemd/coredump.conf.d/10-steamdeck.conf" | grep -q 'managed by steamdeck/setup'
+	run "$ROOT/setup" --system --root "$T" undo
+	[ ! -e "$T/etc/systemd/coredump.conf.d/10-steamdeck.conf" ]
+}

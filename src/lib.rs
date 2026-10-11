@@ -32,4 +32,5 @@ pub mod launch;
 pub mod perms;
 pub mod portals;
 pub mod protondb;
+pub mod scripts;
 pub mod seal_gui;
