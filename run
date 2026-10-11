@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# run - rebuild what changed and start one of the programs right away (a development shortcut).
+#
+#   ./run                  asks which one
+#   ./run protonup [ARGS]  build protonup, run it with ARGS
+#   ./run flatseal [ARGS]  build flatseal, run it with ARGS
+#   ./run --release ...    optimised build instead of the quick debug one
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")"
+
+PROFILE=debug
+FLAGS=()
+if [ "${1:-}" = --release ]; then
+	PROFILE=release
+	FLAGS=(--release)
+	shift
+fi
+
+PROGS=(protonup flatseal)
+prog=${1:-}
+if [ -z "$prog" ]; then
+	i=1
+	for p in "${PROGS[@]}"; do
+		printf '  %d) %s\n' "$i" "$p"
+		i=$((i + 1))
+	done
+	read -rp "run which? " n
+	case $n in
+		[0-9]*) prog=${PROGS[$((n - 1))]:-} ;;
+		*) prog=$n ;;
+	esac
+else
+	shift
+fi
+case " ${PROGS[*]} " in
+	*" $prog "*) ;;
+	*) echo "run: unknown program '$prog' (${PROGS[*]})" >&2; exit 2 ;;
+esac
+
+# the target dir may be set elsewhere (CARGO_TARGET_DIR); ask cargo instead of guessing
+cargo build -q -p "$prog" "${FLAGS[@]}"
+target=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')}
+exec "$target/$PROFILE/$prog" "$@"

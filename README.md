@@ -122,6 +122,12 @@ bats tests/             # the install and setup scripts, 20 tests
 
 Use `--portable` for releases: a plain build needs the glibc of the machine it was built on.
 
+## Development
+
+`./run` rebuilds what changed and starts a program straight away: `./run` asks which one,
+`./run flatseal show org.mozilla.firefox` passes arguments through, `./run --release protonup` uses the
+optimised build. `./build` makes the distributable binaries (`--portable` for the release).
+
 ## Status
 
 Tested on an x86_64 desktop: all unit tests, the whole install pipeline against a local mock of the
