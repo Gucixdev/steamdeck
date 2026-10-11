@@ -32,6 +32,8 @@ pub enum Msg {
     GameFilter(String),
     /// every Steam install found, with its tools, games and per-game choices
     All(Vec<RootInfo>),
+    /// the same scan with the sizes of the installed tools (slow: it walks every file)
+    Sizes(Vec<RootInfo>),
     /// Steam root, appid, launch options ("" = none)
     SetLaunch(PathBuf, u64, String),
     /// the text being typed in a game's launch-options box
@@ -87,11 +89,11 @@ fn root_label(root: &std::path::Path) -> String {
     }
 }
 
-fn scan_root(tools: PathBuf) -> RootInfo {
+fn scan_root(tools: PathBuf, sizes: bool) -> RootInfo {
     let root = tools.parent().map(PathBuf::from).unwrap_or_default();
     RootInfo {
         label: root_label(&root),
-        installed: install::list_installed(&tools),
+        installed: install::list_installed_with(&tools, sizes),
         valve: games::valve_tools(&root),
         games: games::games(&root),
         mapping: games::mapping(&root),
@@ -234,7 +236,18 @@ impl App {
     fn load_all(&self) -> Task<Msg> {
         let dirs = self.dirs.clone();
         Task::perform(
-            async move { dirs.into_iter().map(scan_root).collect::<Vec<_>>() },
+            crate::ui::blocking(move || {
+                crate::log::write(
+                    "proton",
+                    &format!("scanning {} Steam install(s)", dirs.len()),
+                );
+                let v = dirs
+                    .into_iter()
+                    .map(|d| scan_root(d, false))
+                    .collect::<Vec<_>>();
+                crate::log::write("proton", &format!("scanned {} Steam install(s)", v.len()));
+                v
+            }),
             Msg::All,
         )
     }
@@ -244,7 +257,7 @@ impl App {
         let l = self.lists.entry(src.id).or_default();
         l.loading = true;
         Task::perform(
-            async move { github::releases_page(src, page, 100) },
+            crate::ui::blocking(move || github::releases_page(src, page, 100)),
             move |r| Msg::Loaded(src.id, page, r),
         )
     }
@@ -294,9 +307,10 @@ impl App {
                     .into_iter()
                     .filter_map(sources::find)
                     .map(|src| {
-                        Task::perform(async move { github::releases_page(src, 1, 5) }, move |r| {
-                            Msg::UpdateLoaded(src.id, r)
-                        })
+                        Task::perform(
+                            crate::ui::blocking(move || github::releases_page(src, 1, 5)),
+                            move |r| Msg::UpdateLoaded(src.id, r),
+                        )
                     })
                     .collect();
                 return Task::batch(tasks);
@@ -319,9 +333,9 @@ impl App {
                                 let dir = self.dir.clone();
                                 let fam = src.id.to_string();
                                 return Task::perform(
-                                    async move {
+                                    crate::ui::blocking(move || {
                                         crate::update::cleanup_old(&dir, &fam, &dirname, true)
-                                    },
+                                    }),
                                     Msg::Cleaned,
                                 );
                             }
@@ -362,7 +376,32 @@ impl App {
                 if let Some(r) = v.iter().find(|r| r.tools == self.dir) {
                     self.installed = r.installed.clone();
                 }
+                // everything is on screen now; the sizes come a little later
+                let dirs: Vec<PathBuf> = v.iter().map(|r| r.tools.clone()).collect();
                 self.all = v;
+                return Task::perform(
+                    crate::ui::blocking(move || {
+                        dirs.into_iter()
+                            .map(|d| scan_root(d, true))
+                            .collect::<Vec<_>>()
+                    }),
+                    Msg::Sizes,
+                );
+            }
+            Msg::Sizes(v) => {
+                // only the sizes: the rest of the state may have changed since the scan started
+                for new in v {
+                    if let Some(r) = self.all.iter_mut().find(|r| r.tools == new.tools) {
+                        for i in &mut r.installed {
+                            if let Some(n) = new.installed.iter().find(|n| n.name == i.name) {
+                                i.size = n.size;
+                            }
+                        }
+                    }
+                }
+                if let Some(r) = self.all.iter().find(|r| r.tools == self.dir) {
+                    self.installed = r.installed.clone();
+                }
             }
             Msg::LaunchEdit(root, appid, t) => {
                 self.launch_edit.insert((root, appid), t);
@@ -381,14 +420,14 @@ impl App {
                 self.error = None;
                 self.notice = None;
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         let o = if opts.is_empty() {
                             None
                         } else {
                             Some(opts.as_str())
                         };
                         games::set_launch_options(&root, appid, o)
-                    },
+                    }),
                     Msg::LaunchSet,
                 );
             }
@@ -412,12 +451,12 @@ impl App {
                     .flat_map(|r| r.games.iter().map(|g| g.appid))
                     .collect();
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         (
                             crate::protondb::fetch_missing(&ids),
                             crate::protondb::fetch_native_missing(&ids),
                         )
-                    },
+                    }),
                     |(t, n)| Msg::DbDone(t, n),
                 );
             }
@@ -430,14 +469,14 @@ impl App {
                 self.error = None;
                 self.notice = None;
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         let t = if tool.is_empty() {
                             None
                         } else {
                             Some(tool.as_str())
                         };
                         games::set_tool(&root, appid, t)
-                    },
+                    }),
                     Msg::ToolSet,
                 );
             }
@@ -572,7 +611,9 @@ impl App {
                         let (_, fam, dirname) = self.pending_cleanup.remove(i);
                         let dir = self.dir.clone();
                         extra.push(Task::perform(
-                            async move { crate::update::cleanup_old(&dir, &fam, &dirname, true) },
+                            crate::ui::blocking(move || {
+                                crate::update::cleanup_old(&dir, &fam, &dirname, true)
+                            }),
                             Msg::Cleaned,
                         ));
                     }

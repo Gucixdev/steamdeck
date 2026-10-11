@@ -167,7 +167,10 @@ impl State {
                 checks: Vec::new(),
                 crashes: None,
             },
-            Task::perform(async { (checks(), crashes()) }, |(c, k)| Msg::Loaded(c, k)),
+            Task::perform(
+                crate::ui::blocking(move || (checks(), crashes())),
+                |(c, k)| Msg::Loaded(c, k),
+            ),
         )
     }
 

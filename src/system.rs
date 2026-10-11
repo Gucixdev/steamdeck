@@ -34,9 +34,10 @@ impl State {
         };
         (
             s,
-            Task::perform(async { run_actions(vec!["status".into()]) }, |(a, o)| {
-                Msg::Done(a, o)
-            }),
+            Task::perform(
+                crate::ui::blocking(move || run_actions(vec!["status".into()])),
+                |(a, o)| Msg::Done(a, o),
+            ),
         )
     }
 
@@ -51,7 +52,9 @@ impl State {
             Msg::Run(a) => {
                 self.busy = true;
                 self.output = format!("running: {}\n", a.join(" "));
-                return Task::perform(async move { run_actions(a) }, |(a, o)| Msg::Done(a, o));
+                return Task::perform(crate::ui::blocking(move || run_actions(a)), |(a, o)| {
+                    Msg::Done(a, o)
+                });
             }
             Msg::Done(a, o) => {
                 self.busy = false;

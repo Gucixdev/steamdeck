@@ -145,7 +145,9 @@ impl State {
                 };
                 self.running = Some(sc.name.clone());
                 self.output.clear();
-                return Task::perform(async move { run(&sc) }, |(n, o)| Msg::Done(n, o));
+                return Task::perform(crate::ui::blocking(move || run(&sc)), |(n, o)| {
+                    Msg::Done(n, o)
+                });
             }
             Msg::Done(name, out) => {
                 log::write("script", &format!("{name}\n{out}"));

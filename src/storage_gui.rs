@@ -39,7 +39,7 @@ pub struct State {
 
 fn load() -> Task<Msg> {
     Task::perform(
-        async {
+        crate::ui::blocking(move || {
             let home = dirs::home_dir().unwrap_or_default();
             let mut out = Vec::new();
             for tools in crate::steam::tool_dirs(&home) {
@@ -64,7 +64,7 @@ fn load() -> Task<Msg> {
                     .cmp(&(a.entry.prefix_bytes + a.entry.shader_bytes))
             });
             out
-        },
+        }),
         Msg::Loaded,
     )
 }
@@ -99,7 +99,7 @@ impl State {
                     return Task::none();
                 };
                 self.output = "working...".into();
-                return Task::perform(async move { run(&row, a) }, Msg::Done);
+                return Task::perform(crate::ui::blocking(move || run(&row, a)), Msg::Done);
             }
             Msg::Done(o) => {
                 crate::log::write("storage", &o);

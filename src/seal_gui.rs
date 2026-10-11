@@ -78,7 +78,7 @@ impl App {
     pub fn new(select: Option<String>) -> (Self, Task<Msg>) {
         // `flatpak list` is slow: the window opens first, the app list arrives when it is done
         let (apps, error) = (vec![], None);
-        let load = Task::perform(async { flatpak::list_apps() }, Msg::Apps);
+        let load = Task::perform(crate::ui::blocking(flatpak::list_apps), Msg::Apps);
         let mut app = Self::blank(apps, error);
         app.loading = true;
         if let Some(id) = select.filter(|s| !s.is_empty()) {
@@ -126,13 +126,15 @@ impl App {
         if self.selected == GLOBAL {
             let ids: Vec<String> = self.apps.iter().map(|a| a.id.clone()).collect();
             return Task::perform(
-                async move { ids.iter().map(|id| portals::grants(id)).collect::<Vec<_>>() },
+                crate::ui::blocking(move || {
+                    ids.iter().map(|id| portals::grants(id)).collect::<Vec<_>>()
+                }),
                 Msg::GlobalGrants,
             );
         }
         let app = self.selected.clone();
         Task::perform(
-            async move { (app.clone(), portals::grants(&app)) },
+            crate::ui::blocking(move || (app.clone(), portals::grants(&app))),
             |(a, g)| Msg::Grants(a, Ok(g)),
         )
     }
@@ -167,7 +169,7 @@ impl App {
                 // there is no global portal setting: apply it to every installed app
                 let ids: Vec<String> = self.apps.iter().map(|a| a.id.clone()).collect();
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         let mut failed = Vec::new();
                         for id in &ids {
                             if let Err(e) = portals::set(id, &PORTALS[i], a) {
@@ -177,7 +179,7 @@ impl App {
                         let all: Vec<Vec<Grant>> =
                             ids.iter().map(|id| portals::grants(id)).collect();
                         (all, failed)
-                    },
+                    }),
                     |(all, failed)| {
                         if failed.is_empty() {
                             Msg::GlobalGrants(all)
@@ -190,22 +192,22 @@ impl App {
             Msg::Portal(i, a) => {
                 let app = self.selected.clone();
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         let r = portals::set(&app, &PORTALS[i], a);
                         let g = portals::grants(&app);
                         (app, r.map(|_| g))
-                    },
+                    }),
                     |(a, r)| Msg::Grants(a, r),
                 );
             }
             Msg::Revoke(table, id) => {
                 let app = self.selected.clone();
                 return Task::perform(
-                    async move {
+                    crate::ui::blocking(move || {
                         let r = portals::revoke(&app, &table, &id);
                         let g = portals::grants(&app);
                         (app, r.map(|_| g))
-                    },
+                    }),
                     |(a, r)| Msg::Grants(a, r),
                 );
             }
@@ -260,11 +262,11 @@ impl App {
                 if self.selected != GLOBAL {
                     let app = self.selected.clone();
                     return Task::perform(
-                        async move {
+                        crate::ui::blocking(move || {
                             let r = portals::reset(&app);
                             let g = portals::grants(&app);
                             (app, r.map(|_| g))
-                        },
+                        }),
                         |(a, r)| Msg::Grants(a, r),
                     );
                 }

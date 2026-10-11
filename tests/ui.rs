@@ -163,6 +163,17 @@ fn world() -> World {
         "org.a.A\tAlpha App\t10 MB\tuser\norg.b.B\tBeta App\t20 MB\tuser\n",
     )
     .unwrap();
+    // the installation's own folders next to the app data, as on a machine where ~/.var/app is a link
+    for d in [
+        "repo/objects",
+        "runtime/org.fd.Platform",
+        "app/org.a.A",
+        "exports/share",
+        "overrides",
+    ] {
+        fs::create_dir_all(home.join(".var/app").join(d)).unwrap();
+        fs::write(home.join(".var/app").join(d).join("keep"), "installation").unwrap();
+    }
     for id in ["org.a.A", "org.b.B", "org.gone.Gone"] {
         let d = home.join(".var/app").join(id).join("config");
         fs::create_dir_all(&d).unwrap();
@@ -541,6 +552,40 @@ fn big_pages_draw_fast_enough_not_to_stutter() {
         assert!(
             ms < 400,
             "{name} page takes {ms} ms to build and lay out: it would stutter"
+        );
+    }
+}
+
+#[test]
+fn the_flatpak_installation_folders_are_not_listed_and_survive_everything() {
+    let w = world();
+    let mut win = Window::open(Start {
+        section: Section::Apps,
+        ..Start::default()
+    });
+    for not_app_data in ["repo", "runtime", "exports", "overrides"] {
+        assert!(
+            !win.has(not_app_data),
+            "{not_app_data} must not be listed as app data"
+        );
+    }
+    // clear all data of every row that offers it, then check the installation is whole
+    for i in 0..3 {
+        win.feed(vec![Msg::Apps(steamdeck::flatapps::Msg::Ask(
+            i,
+            steamdeck::flatapps::Action::DeleteData,
+        ))]);
+        win.click("Yes");
+    }
+    for d in [
+        "repo/objects",
+        "runtime/org.fd.Platform",
+        "exports/share",
+        "overrides",
+    ] {
+        assert!(
+            w.home.join(".var/app").join(d).join("keep").is_file(),
+            "{d} was touched"
         );
     }
 }

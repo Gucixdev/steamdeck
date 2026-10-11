@@ -178,7 +178,7 @@ pub struct State {
 }
 
 fn scan() -> Task<Msg> {
-    Task::perform(async { detect() }, Msg::Found)
+    Task::perform(crate::ui::blocking(detect), Msg::Found)
 }
 
 impl State {
@@ -216,7 +216,7 @@ impl State {
                     return Task::none();
                 }
                 self.output = format!("removing {}...", inst.label);
-                return Task::perform(async move { remove(&inst) }, Msg::Done);
+                return Task::perform(crate::ui::blocking(move || remove(&inst)), Msg::Done);
             }
             Msg::Done(o) => {
                 log::write("steam-remove", &o);

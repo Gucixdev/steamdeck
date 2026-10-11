@@ -64,8 +64,18 @@ fn dir_size(p: &std::path::Path) -> u64 {
     n
 }
 
+/// A Flatpak application id: reverse-DNS with at least two dots (org.mozilla.firefox). The name
+/// matters because on some machines `~/.var/app` is a symlink to the Flatpak installation itself, whose
+/// folders (`repo`, `runtime`, `app`, `exports`, `overrides`) must never be taken for app data.
 fn valid_id(id: &str) -> bool {
-    crate::flatpak::valid_id(id)
+    crate::flatpak::valid_id(id) && id.matches('.').count() >= 2
+}
+
+/// Does this directory look like the data of an app (`config`, `data`, `cache` or `.local` inside)?
+fn looks_like_app_data(p: &std::path::Path) -> bool {
+    ["config", "data", "cache", ".local"]
+        .iter()
+        .any(|d| p.join(d).is_dir())
 }
 
 pub fn list() -> Vec<Item> {
@@ -89,7 +99,9 @@ pub fn list() -> Vec<Item> {
     if let Ok(rd) = std::fs::read_dir(home.join(".var/app")) {
         let mut orphans: Vec<Item> = rd
             .flatten()
-            .filter(|e| e.path().is_dir())
+            // a real directory (not a link) that looks like app data, with an app id for a name
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .filter(|e| looks_like_app_data(&e.path()))
             .filter_map(|e| {
                 let id = e.file_name().to_string_lossy().to_string();
                 (valid_id(&id) && !v.iter().any(|i| i.id == id)).then(|| Item {
@@ -145,7 +157,7 @@ pub struct State {
 }
 
 fn load() -> Task<Msg> {
-    Task::perform(async { list() }, Msg::Loaded)
+    Task::perform(crate::ui::blocking(list), Msg::Loaded)
 }
 
 impl State {
@@ -175,7 +187,10 @@ impl State {
                     *p = (0, 0, String::new());
                 }
                 let progress = self.progress.clone();
-                return Task::perform(async move { update_all_streaming(progress) }, Msg::Done);
+                return Task::perform(
+                    crate::ui::blocking(move || update_all_streaming(progress)),
+                    Msg::Done,
+                );
             }
             Msg::Loaded(v) => {
                 self.items = Some(v);
@@ -200,7 +215,7 @@ impl State {
                     Action::Unused => "Removing unused runtimes".to_string(),
                 };
                 self.output.clear();
-                return Task::perform(async move { run(item, a) }, Msg::Done);
+                return Task::perform(crate::ui::blocking(move || run(item, a)), Msg::Done);
             }
             Msg::Done(o) => {
                 self.started = None;
@@ -777,5 +792,29 @@ mod tests {
         let p = progress.lock().unwrap();
         assert_eq!(p.0, 3, "every Installing/Updating line is one step");
         assert_eq!(p.2, "org.gimp.GIMP");
+    }
+    #[test]
+    fn the_flatpak_installation_folders_are_never_taken_for_app_data() {
+        // some machines have ~/.var/app as a link to the Flatpak installation (repo, runtime, ...)
+        for bad in [
+            "repo",
+            "runtime",
+            "app",
+            "exports",
+            "overrides",
+            ".removed",
+            "org.only",
+        ] {
+            assert!(!valid_id(bad), "{bad}");
+        }
+        assert!(valid_id("org.mozilla.firefox"));
+        let home = std::env::temp_dir().join(format!("fa-inst-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".var/app/repo/objects")).unwrap();
+        fs::write(home.join(".var/app/repo/objects/x"), "keep").unwrap();
+        let m = run_in(&home, Some(item("repo")), Action::DeleteData);
+        assert!(m.contains("odd app id"), "{m}");
+        assert!(home.join(".var/app/repo/objects/x").is_file());
+        let _ = fs::remove_dir_all(&home);
     }
 }

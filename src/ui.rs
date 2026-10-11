@@ -30,6 +30,19 @@ pub fn theme() -> Theme {
     )
 }
 
+/// Run blocking work on its own thread and wait for it without blocking the caller.
+///
+/// A plain blocking call inside the async block of a `Task::perform` blocks the thread that polls the
+/// whole batch of tasks it belongs to, so one slow scan (a big directory, a slow network call) made
+/// every other page "load" for ever. This keeps the polling thread free.
+pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.await.expect("a background job ended without an answer")
+}
+
 /// "45 s", "3 min 20 s", "1 h 05 min": a time left or elapsed, for progress lines.
 pub fn human_duration(secs: u64) -> String {
     if secs < 60 {
