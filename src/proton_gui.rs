@@ -1,20 +1,25 @@
 //! The window: a row of sources, two tabs (installed / available), big touch targets, a progress bar
 //! for the running install and a queue for "install all".
-use deck_common::{
+use crate::games::{self, Game};
+use crate::github::Release;
+use crate::install::{self, Installed, Progress};
+use crate::sources::{self, Source, SOURCES};
+use crate::ui::{
     accent_button, danger_button, human_bytes, quiet_button, theme, AMBER, DIM, GREEN, PAD, PURPLE,
-    RED, SMALL_SIZE, SPACING, TEXT_SIZE, TITLE_SIZE,
+    RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use iced::widget::{button, column, container, progress_bar, row, scrollable, space, text, Column};
+use crate::ui::{item, nav_item, shell};
+use crate::{github, steam};
+use iced::widget::{
+    button, column, pick_list, progress_bar, row, scrollable, space, text, text_input, Column,
+};
 use iced::{Element, Fill, Length, Task};
-use protonup::install::{self, Installed, Progress};
-use protonup::sources::{self, Source, SOURCES};
-use protonup::{github, steam, Release};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
-pub fn run(dir: PathBuf, pinned: bool) -> iced::Result {
+pub fn run(dir: PathBuf, pinned: bool, tab: Option<String>) -> iced::Result {
     iced::application(
-        move || App::new(dir.clone(), pinned),
+        move || App::new(dir.clone(), pinned, tab.as_deref()),
         App::update,
         App::view,
     )
@@ -28,12 +33,20 @@ pub fn run(dir: PathBuf, pinned: bool) -> iced::Result {
 enum Tab {
     Installed,
     Available,
+    Games,
 }
 
 #[derive(Debug, Clone)]
 enum Msg {
     Tab(Tab),
     Source(&'static str),
+    SourceName(&'static str),
+    GameFilter(String),
+    /// the games of a Steam root and what is mapped for them
+    Games(PathBuf, Vec<Game>, HashMap<u64, String>),
+    /// appid, tool name ("" = Steam default)
+    SetTool(u64, String),
+    ToolSet(Result<HashMap<u64, String>, String>),
     Refresh,
     Installed(PathBuf, Vec<Installed>),
     LoadMore,
@@ -87,10 +100,13 @@ struct App {
     queue_total: usize,
     confirm_remove: Option<String>,
     confirm_all: bool,
+    games: Vec<Game>,
+    mapping: HashMap<u64, String>,
+    game_filter: String,
 }
 
 impl App {
-    fn new(dir: PathBuf, pinned: bool) -> (Self, Task<Msg>) {
+    fn new(dir: PathBuf, pinned: bool, start: Option<&str>) -> (Self, Task<Msg>) {
         let home = dirs::home_dir().unwrap_or_default();
         let dirs = if pinned {
             vec![dir.clone()]
@@ -101,10 +117,12 @@ impl App {
         let mut app = App {
             dir,
             dirs,
-            tab: if installed.is_empty() {
-                Tab::Available
-            } else {
-                Tab::Installed
+            tab: match start {
+                Some("installed") => Tab::Installed,
+                Some("available") => Tab::Available,
+                Some("games") => Tab::Games,
+                _ if installed.is_empty() => Tab::Available,
+                _ => Tab::Installed,
             },
             source: sources::default_source(),
             lists: HashMap::new(),
@@ -116,8 +134,11 @@ impl App {
             queue_total: 0,
             confirm_remove: None,
             confirm_all: false,
+            games: Vec::new(),
+            mapping: HashMap::new(),
+            game_filter: String::new(),
         };
-        let t = Task::batch([app.fetch_page(1), {
+        let t = Task::batch([app.fetch_page(1), app.load_games(), {
             let d = app.dir.clone();
             Task::perform(
                 async move { (d.clone(), install::list_installed(&d)) },
@@ -134,6 +155,25 @@ impl App {
         Task::perform(
             async move { (dir.clone(), install::list_installed(&dir)) },
             |(d, l)| Msg::Installed(d, l),
+        )
+    }
+
+    /// The Steam root is the directory above compatibilitytools.d.
+    fn root(&self) -> Option<PathBuf> {
+        self.dir.parent().map(PathBuf::from)
+    }
+
+    fn load_games(&self) -> Task<Msg> {
+        let Some(root) = self.root() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                let g = games::games(&root);
+                let m = games::mapping(&root);
+                (root, g, m)
+            },
+            |(r, g, m)| Msg::Games(r, g, m),
         )
     }
 
@@ -171,6 +211,45 @@ impl App {
     fn update(&mut self, m: Msg) -> Task<Msg> {
         match m {
             Msg::Tab(t) => self.tab = t,
+            Msg::GameFilter(q) => self.game_filter = q,
+            Msg::SourceName(n) => {
+                if let Some(s) = SOURCES.iter().find(|s| s.name == n) {
+                    return self.update(Msg::Source(s.id));
+                }
+            }
+            Msg::Games(root, g, m) => {
+                if Some(&root) == self.root().as_ref() {
+                    self.games = g;
+                    self.mapping = m;
+                }
+            }
+            Msg::SetTool(appid, tool) => {
+                let Some(root) = self.root() else {
+                    return Task::none();
+                };
+                self.error = None;
+                self.notice = None;
+                return Task::perform(
+                    async move {
+                        let t = if tool.is_empty() {
+                            None
+                        } else {
+                            Some(tool.as_str())
+                        };
+                        games::set_tool(&root, appid, t).map(|_| games::mapping(&root))
+                    },
+                    Msg::ToolSet,
+                );
+            }
+            Msg::ToolSet(r) => {
+                match r {
+                    Ok(m) => {
+                        self.mapping = m;
+                        self.notice = Some("Saved. Start Steam again; the game uses this tool from its next launch.".into());
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+            }
             Msg::Source(id) => {
                 if let Some(s) = sources::find(id) {
                     self.source = s;
@@ -211,7 +290,7 @@ impl App {
             }
             Msg::UseDir(d) => {
                 self.dir = d;
-                return self.reload();
+                return Task::batch([self.reload(), self.load_games()]);
             }
             Msg::Installed(d, l) => {
                 if d == self.dir {
@@ -301,40 +380,23 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Msg> {
-        let tab_btn = |label: &str, t: Tab| {
-            let b = button(text(label.to_string()).size(TEXT_SIZE))
-                .padding(PAD)
-                .on_press(Msg::Tab(t));
-            if self.tab == t {
-                b.style(accent_button())
-            } else {
-                b.style(quiet_button())
-            }
-        };
-        let header = row![
-            text("ProtonUp").size(TITLE_SIZE).color(GREEN),
-            space::horizontal(),
-            tab_btn("Installed", Tab::Installed),
-            tab_btn("Available", Tab::Available),
-            button(text("Refresh").size(TEXT_SIZE))
-                .padding(PAD)
-                .on_press(Msg::Refresh)
-                .style(quiet_button()),
+        let side = column![
+            nav_item(
+                "Installed",
+                self.tab == Tab::Installed,
+                Msg::Tab(Tab::Installed)
+            ),
+            nav_item(
+                "Available",
+                self.tab == Tab::Available,
+                Msg::Tab(Tab::Available)
+            ),
+            nav_item("Games", self.tab == Tab::Games, Msg::Tab(Tab::Games)),
+            space::vertical(),
+            nav_item("Refresh", false, Msg::Refresh),
         ]
-        .spacing(SPACING)
-        .align_y(iced::Alignment::Center);
-
-        let mut chips = row![].spacing(8);
-        for s in SOURCES {
-            let b = button(text(s.name).size(SMALL_SIZE))
-                .padding(10)
-                .on_press(Msg::Source(s.id));
-            chips = chips.push(if s.id == self.source.id && self.tab == Tab::Available {
-                b.style(accent_button())
-            } else {
-                b.style(quiet_button())
-            });
-        }
+        .spacing(8)
+        .height(Fill);
 
         let dir_line: Element<Msg> = if self.dirs.len() > 1 {
             let mut r = row![text("Install into").size(SMALL_SIZE).color(DIM)]
@@ -402,17 +464,90 @@ impl App {
         let body: Element<Msg> = match self.tab {
             Tab::Installed => self.installed_view(),
             Tab::Available => self.available_view(),
+            Tab::Games => self.games_view(),
         };
-        let top = if self.tab == Tab::Available {
-            column![header, chips, dir_line, status]
-        } else {
-            column![header, dir_line, status]
+        let mut top = column![dir_line, status].spacing(SPACING);
+        if self.tab == Tab::Available {
+            let names: Vec<&'static str> = SOURCES.iter().map(|s| s.name).collect();
+            top = top.push(
+                row![
+                    text("Category").size(SMALL_SIZE).color(DIM),
+                    pick_list(names, Some(self.source.name), Msg::SourceName)
+                        .text_size(SMALL_SIZE)
+                        .padding(10),
+                ]
+                .spacing(SPACING)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+        shell(side.into(), column![top, body].spacing(SPACING).into())
+    }
+
+    fn games_view(&self) -> Element<'_, Msg> {
+        let mut col = Column::new().spacing(10);
+        if games::steam_running() {
+            col = col.push(
+                text("Steam is running: close it completely (Steam > Exit) before changing a game, or Steam undoes the change.")
+                    .size(SMALL_SIZE)
+                    .color(AMBER),
+            );
+        }
+        if self.games.is_empty() {
+            col = col.push(
+                text("No installed games found in this Steam.")
+                    .size(TEXT_SIZE)
+                    .color(DIM),
+            );
+        }
+        col = col.push(
+            text_input("Filter games", &self.game_filter)
+                .on_input(Msg::GameFilter)
+                .padding(10)
+                .size(SMALL_SIZE),
+        );
+        const DEFAULT: &str = "Steam default";
+        let row_for = |appid: u64, name: &str| -> Element<'_, Msg> {
+            let cur = self.mapping.get(&appid).cloned();
+            let mut options: Vec<String> = vec![DEFAULT.to_string()];
+            options.extend(self.installed.iter().map(|i| i.tool.clone()));
+            if let Some(c) = &cur {
+                if !options.contains(c) {
+                    options.push(c.clone());
+                }
+            }
+            let selected = cur.unwrap_or_else(|| DEFAULT.to_string());
+            item(
+                name.to_string(),
+                if appid == 0 {
+                    "used by every game that has no choice of its own".to_string()
+                } else {
+                    format!("app {appid}")
+                },
+                pick_list(options, Some(selected), move |t| {
+                    Msg::SetTool(appid, if t == DEFAULT { String::new() } else { t })
+                })
+                .text_size(SMALL_SIZE)
+                .padding(10)
+                .into(),
+            )
         };
-        container(column![top.spacing(SPACING), body].spacing(SPACING))
-            .padding(PAD)
-            .width(Fill)
-            .height(Fill)
-            .into()
+        let q = self.game_filter.to_lowercase();
+        if q.is_empty() {
+            col = col.push(row_for(0, "All games"));
+        }
+        for g in self
+            .games
+            .iter()
+            .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
+        {
+            col = col.push(row_for(g.appid, &g.name));
+        }
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
     }
 
     fn installed_view(&self) -> Element<'_, Msg> {
@@ -458,12 +593,17 @@ impl App {
                 .align_y(iced::Alignment::Center),
             );
         }
-        scrollable(col).height(Fill).into()
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
     }
 
     fn available_view(&self) -> Element<'_, Msg> {
         let src = self.source;
-        let about = text(src.about).size(SMALL_SIZE).color(DIM);
+        let about = text(src.about).size(SMALL_SIZE).color(DIM).width(Fill);
         let Some(l) = self.lists.get(src.id) else {
             return column![
                 about,
@@ -495,7 +635,7 @@ impl App {
             .map(|a| a.size)
             .sum();
 
-        let mut bar = row![about, space::horizontal()]
+        let mut bar = row![about]
             .spacing(SPACING)
             .align_y(iced::Alignment::Center);
         if self.confirm_all {
@@ -584,9 +724,16 @@ impl App {
                 b.on_press(Msg::LoadMore)
             });
         }
-        column![bar, scrollable(col).height(Fill)]
-            .spacing(SPACING)
-            .into()
+        column![
+            bar,
+            scrollable(col.padding(iced::Padding {
+                right: 16.0,
+                ..iced::Padding::ZERO
+            }))
+            .height(Fill)
+        ]
+        .spacing(SPACING)
+        .into()
     }
 }
 

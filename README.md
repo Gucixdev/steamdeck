@@ -5,8 +5,8 @@ written in Rust, and three bash scripts that put them on the Deck and tune the s
 
 | | what | form |
 |---|---|---|
-| [`protonup`](protonup) | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more for Steam | one binary, window or command line |
-| [`flatseal`](flatseal) | edit Flatpak permission overrides | one binary, window or command line |
+| `protonup` | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more for Steam | one binary, window or command line |
+| `flatseal` | edit Flatpak permission overrides | one binary, window or command line |
 | [`install`](install) | put the two binaries and menu entries on the Deck | bash, no root |
 | [`setup`](setup) | OOM guard, swap file, sysctl, ssh | bash, asks sudo |
 | [`build`](build) | build the release binaries | bash |
@@ -29,7 +29,21 @@ Nothing needs root. Options (`bash -s -- OPTION`): `--only protonup`, `--timer` 
 `protonup install latest`), `--prefix DIR`, `--version TAG`, `--uninstall`, `--dry-run`.
 
 For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick ProtonUp or Flatseal.
-The windows are laid out for the Deck's screen and touch.
+The windows are laid out for the Deck's screen and touch, and both use the same layout: a sidebar on the
+left, the working area on the right (`src/ui.rs`).
+
+## Layout
+
+```
+src/ui.rs                 theme, buttons and the sidebar + main layout both windows share
+src/protonup.rs           protonup command line     src/proton_gui.rs   its window
+src/github.rs install.rs sources.rs steam.rs games.rs    releases, install, sources, Steam dirs, per-game tools
+src/flatseal.rs           flatseal command line     src/seal_gui.rs     its window
+src/flatpak.rs keyfile.rs perms.rs portals.rs        overrides, keyfile format, permissions, portals
+build install setup run   bash: build, curl|bash installer, system setup, rebuild-and-start
+```
+
+One Cargo package, one `src`, two binaries (`protonup`, `flatseal`).
 
 Then, if you want the system tuning:
 
@@ -43,7 +57,9 @@ passwd                 # once: the deck user has no password and sudo needs one
 ## protonup
 
 ```
-protonup                       open the window
+protonup [gui [TAB]]           open the window (TAB: installed, available, games)
+protonup games                 installed games and the tool each one runs with
+protonup use APPID TOOL|default   run one game with TOOL (Steam must be closed)
 protonup sources               the tools it can fetch
 protonup list [-n N | --all]   releases of a source, installed ones marked
 protonup install [TAG]         one release, or the newest
@@ -61,6 +77,12 @@ protonup installed | remove NAME | path
 | `sarek` | Proton-Sarek, for older GPUs and Vulkan drivers |
 | `northstar` | NorthstarProton, for the Titanfall 2 Northstar client |
 | `luxtorpeda` | runs the native Linux engine of a game instead of its Windows build |
+
+In the window: **Installed** (remove), **Available** (a category dropdown, then that category's
+releases) and **Games** (a dropdown per game, like ProtonUp-Qt: pick the Proton for each game, or one for
+all games). The per-game choice is written to Steam's `config/config.vdf` (`CompatToolMapping`); Steam
+rewrites that file when it exits, so protonup refuses to change it while Steam is running and keeps a
+`config.vdf.steamdeck-bak` of the previous file.
 
 Releases come from GitHub's API. Downloads are checked against the SHA-512 the project publishes; a
 project that publishes none (Sarek, Northstar) is installed on HTTPS alone and the window and the

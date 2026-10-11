@@ -38,6 +38,6 @@ case " ${PROGS[*]} " in
 esac
 
 # the target dir may be set elsewhere (CARGO_TARGET_DIR); ask cargo instead of guessing
-cargo build -q -p "$prog" "${FLAGS[@]}"
+cargo build -q --bin "$prog" "${FLAGS[@]}"
 target=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')}
 exec "$target/$PROFILE/$prog" "$@"

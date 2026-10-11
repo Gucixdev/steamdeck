@@ -37,10 +37,10 @@ if [ "$PORTABLE" = 1 ]; then
 	command -v zig >/dev/null || die "--portable needs zig"
 	command -v cargo-zigbuild >/dev/null || die "--portable needs cargo-zigbuild (cargo install cargo-zigbuild)"
 	rustup target add "$TARGET" >/dev/null 2>&1 || true
-	cargo zigbuild --release --target "$TARGET.$GLIBC" -p protonup -p flatseal
+	cargo zigbuild --release --target "$TARGET.$GLIBC" --bins
 	RELDIR=target/$TARGET/release
 else
-	cargo build --release -p protonup -p flatseal
+	cargo build --release --bins
 	RELDIR=target/release
 fi
 

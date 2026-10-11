@@ -1,10 +1,9 @@
 //! flatseal: Flatpak permission editor for the Steam Deck. No arguments opens the window; the same
 //! operations are available on the command line.
-mod gui;
 
-use flatseal::flatpak::{self, GLOBAL};
-use flatseal::perms::{self, SECTIONS};
 use std::process::ExitCode;
+use steamdeck::flatpak::{self, GLOBAL};
+use steamdeck::perms::{self, SECTIONS};
 
 macro_rules! say {
     ($($a:tt)*) => {{
@@ -51,7 +50,7 @@ fn main() -> ExitCode {
             say!("{HELP}");
             ExitCode::SUCCESS
         }
-        "gui" => gui::run(a(1).map(str::to_string))
+        "gui" => steamdeck::seal_gui::run(a(1).map(str::to_string))
             .map(|_| ExitCode::SUCCESS)
             .unwrap_or_else(fail),
         "list" => match flatpak::list_apps() {
@@ -120,12 +119,12 @@ fn main() -> ExitCode {
             let Some(id) = a(1) else {
                 return fail("portals needs an app id");
             };
-            let g = flatseal::portals::grants(id);
-            for p in flatseal::portals::PORTALS {
-                let v = match flatseal::portals::answer(&g, p) {
-                    flatseal::portals::Answer::Yes => "yes",
-                    flatseal::portals::Answer::No => "no",
-                    flatseal::portals::Answer::Default => "default",
+            let g = steamdeck::portals::grants(id);
+            for p in steamdeck::portals::PORTALS {
+                let v = match steamdeck::portals::answer(&g, p) {
+                    steamdeck::portals::Answer::Yes => "yes",
+                    steamdeck::portals::Answer::No => "no",
+                    steamdeck::portals::Answer::Default => "default",
                 };
                 say!("  {:<13} {:<8} {}", p.name, v, p.about);
             }
@@ -133,7 +132,7 @@ fn main() -> ExitCode {
                 say!(
                     "  file          {}  {}",
                     e.id,
-                    flatseal::portals::document_path(&e.data).unwrap_or_default()
+                    steamdeck::portals::document_path(&e.data).unwrap_or_default()
                 );
             }
             ExitCode::SUCCESS
@@ -142,16 +141,16 @@ fn main() -> ExitCode {
             let (Some(id), Some(name), Some(v)) = (a(1), a(2), a(3)) else {
                 return fail("portal needs APP NAME yes|no|default");
             };
-            let Some(p) = flatseal::portals::PORTALS.iter().find(|p| p.name == name) else {
+            let Some(p) = steamdeck::portals::PORTALS.iter().find(|p| p.name == name) else {
                 return fail(format!("unknown portal '{name}' (background, notification, camera, microphone, speakers)"));
             };
             let ans = match v {
-                "yes" => flatseal::portals::Answer::Yes,
-                "no" => flatseal::portals::Answer::No,
-                "default" => flatseal::portals::Answer::Default,
+                "yes" => steamdeck::portals::Answer::Yes,
+                "no" => steamdeck::portals::Answer::No,
+                "default" => steamdeck::portals::Answer::Default,
                 _ => return fail("the value is yes, no or default"),
             };
-            match flatseal::portals::set(id, p, ans) {
+            match steamdeck::portals::set(id, p, ans) {
                 Ok(()) => {
                     say!("{id}: {name} {v}");
                     ExitCode::SUCCESS
@@ -163,7 +162,7 @@ fn main() -> ExitCode {
             let (Some(id), Some(table), Some(obj)) = (a(1), a(2), a(3)) else {
                 return fail("revoke needs APP TABLE ID");
             };
-            match flatseal::portals::revoke(id, table, obj) {
+            match steamdeck::portals::revoke(id, table, obj) {
                 Ok(()) => {
                     say!("{id}: revoked {table} {obj}");
                     ExitCode::SUCCESS

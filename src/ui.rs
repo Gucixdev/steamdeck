@@ -94,6 +94,87 @@ pub fn danger_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
     solid(color!(0xc0392b))
 }
 
+use iced::widget::{button as btn, column, container, row, text};
+use iced::{Element, Fill, Length};
+
+pub const SIDEBAR_W: f32 = 200.0;
+
+/// Sidebar plus main area, padded the same way in every window.
+pub fn shell<'a, M: 'a>(side: Element<'a, M>, main: Element<'a, M>) -> Element<'a, M> {
+    container(
+        row![
+            container(side).width(Length::Fixed(SIDEBAR_W)).height(Fill),
+            container(main).width(Fill).height(Fill)
+        ]
+        .spacing(SPACING * 1.5),
+    )
+    .padding(PAD)
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+/// One full-width entry of the sidebar; the selected one is highlighted.
+pub fn nav_item<'a, M: Clone + 'a>(
+    label: impl Into<String>,
+    selected: bool,
+    msg: M,
+) -> Element<'a, M> {
+    let b = btn(text(label.into()).size(SMALL_SIZE))
+        .width(Fill)
+        .padding(10)
+        .on_press(msg);
+    if selected {
+        b.style(accent_button()).into()
+    } else {
+        b.style(quiet_button()).into()
+    }
+}
+
+/// A section title in the main area.
+pub fn heading<'a, M: 'a>(s: impl Into<String>) -> Element<'a, M> {
+    text(s.into()).size(TEXT_SIZE).color(PURPLE).into()
+}
+
+/// One of a few choices shown side by side (default / on / off, default / yes / no).
+pub fn segment<'a, M: Clone + 'a>(
+    label: &'static str,
+    selected: bool,
+    danger: bool,
+    msg: M,
+) -> Element<'a, M> {
+    let b = btn(text(label).size(SMALL_SIZE))
+        .padding([6, 10])
+        .on_press(msg);
+    if !selected {
+        b.style(quiet_button()).into()
+    } else if danger {
+        b.style(danger_button()).into()
+    } else {
+        b.style(accent_button()).into()
+    }
+}
+
+/// A line of a list: a name with a dim detail line under it, and controls on the right.
+pub fn item<'a, M: 'a>(
+    name: impl Into<String>,
+    detail: impl Into<String>,
+    controls: Element<'a, M>,
+) -> Element<'a, M> {
+    row![
+        column![
+            text(name.into()).size(TEXT_SIZE),
+            text(detail.into()).size(SMALL_SIZE).color(DIM)
+        ]
+        .spacing(2)
+        .width(Fill),
+        controls,
+    ]
+    .spacing(SPACING)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,3 +187,5 @@ mod tests {
         assert_eq!(human_bytes(1536 * 1024 * 1024), "1.5 GB");
     }
 }
+
+// --- the layout both programs share: a sidebar on the left, the working area on the right ---------

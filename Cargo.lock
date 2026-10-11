@@ -538,13 +538,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "deck-common"
-version = "0.1.0"
-dependencies = [
- "iced",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -710,15 +703,6 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
  "zlib-rs",
-]
-
-[[package]]
-name = "flatseal"
-version = "0.1.0"
-dependencies = [
- "deck-common",
- "dirs",
- "iced",
 ]
 
 [[package]]
@@ -2125,22 +2109,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
-name = "protonup"
-version = "0.1.0"
-dependencies = [
- "deck-common",
- "dirs",
- "flate2",
- "iced",
- "lzma-rust2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "ureq",
-]
-
-[[package]]
 name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2658,6 +2626,21 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "steamdeck"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "flate2",
+ "iced",
+ "lzma-rust2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "ureq",
+]
 
 [[package]]
 name = "strict-num"

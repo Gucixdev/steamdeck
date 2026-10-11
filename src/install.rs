@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Installed {
     pub name: String,
+    /// the name Steam knows the tool by (from compatibilitytool.vdf), what a per-game choice stores
+    pub tool: String,
     pub path: PathBuf,
     pub size: u64,
 }
@@ -58,6 +60,7 @@ pub fn list_installed_with(dir: &Path, sizes: bool) -> Vec<Installed> {
         }
         out.push(Installed {
             size: if sizes { dir_size(&path) } else { 0 },
+            tool: crate::games::internal_name(&path).unwrap_or_else(|| name.clone()),
             name,
             path,
         });

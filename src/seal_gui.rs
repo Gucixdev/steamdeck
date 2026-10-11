@@ -1,15 +1,13 @@
 //! The window: apps on the left, the permissions of the selected one on the right. Every change is
 //! written to the override file at once, like the GTK original does.
-use deck_common::{
-    accent_button, danger_button, quiet_button, theme, AMBER, DIM, GREEN, PAD, PURPLE, RED,
-    SMALL_SIZE, SPACING, TEXT_SIZE,
+use crate::flatpak::{self, App as FpApp, GLOBAL};
+use crate::perms::{self, Layers, Tri, SECTIONS};
+use crate::portals::{self, Answer, Grant, PORTALS};
+use crate::ui::{
+    accent_button, danger_button, nav_item, quiet_button, segment, shell, theme, AMBER, DIM, GREEN,
+    PURPLE, RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use flatseal::flatpak::{self, App as FpApp, GLOBAL};
-use flatseal::perms::{self, Layers, Tri, SECTIONS};
-use flatseal::portals::{self, Answer, Grant, PORTALS};
-use iced::widget::{
-    button, column, container, pick_list, row, scrollable, space, text, text_input, Column,
-};
+use iced::widget::{button, column, pick_list, row, scrollable, space, text, text_input, Column};
 use iced::{Element, Fill, Length, Task};
 
 pub fn run(select: Option<String>) -> iced::Result {
@@ -240,15 +238,7 @@ impl App {
         let q = self.search.to_lowercase();
         let mut items: Vec<Element<Msg>> = Vec::new();
         let mut entry = |id: String, label: String| {
-            let b = button(text(label).size(SMALL_SIZE))
-                .padding(10)
-                .width(Fill)
-                .on_press(Msg::Select(id.clone()));
-            items.push(if id == self.selected {
-                b.style(accent_button()).into()
-            } else {
-                b.style(quiet_button()).into()
-            });
+            items.push(nav_item(label, id == self.selected, Msg::Select(id)));
         };
         entry(GLOBAL.to_string(), "All apps (global)".to_string());
         for a in &self.apps {
@@ -267,8 +257,7 @@ impl App {
                 .size(SMALL_SIZE),
             scrollable(list).height(Fill),
         ]
-        .spacing(SPACING)
-        .width(Length::Fixed(190.0));
+        .spacing(SPACING);
 
         // right: the permissions
         let mut right = Column::new().spacing(SPACING);
@@ -314,16 +303,7 @@ impl App {
                 let key = s.key;
                 let nm: &'static str = name;
                 let pick = |label: &'static str, st: Tri| {
-                    let b = button(text(label).size(SMALL_SIZE))
-                        .padding([6, 10])
-                        .on_press(Msg::Toggle(key, nm, st));
-                    if own != st {
-                        b.style(quiet_button())
-                    } else if st == Tri::Deny {
-                        b.style(danger_button())
-                    } else {
-                        b.style(accent_button())
-                    }
+                    segment(label, own == st, st == Tri::Deny, Msg::Toggle(key, nm, st))
                 };
                 right = right.push(
                     column![
@@ -383,16 +363,7 @@ impl App {
             for (i, p) in PORTALS.iter().enumerate() {
                 let a = portals::answer(&self.grants, p);
                 let pick = |label: &'static str, v: Answer| {
-                    let b = button(text(label).size(SMALL_SIZE))
-                        .padding([6, 10])
-                        .on_press(Msg::Portal(i, v));
-                    if a != v {
-                        b.style(quiet_button())
-                    } else if v == Answer::No {
-                        b.style(danger_button())
-                    } else {
-                        b.style(accent_button())
-                    }
+                    segment(label, a == v, v == Answer::No, Msg::Portal(i, v))
                 };
                 right = right.push(
                     column![
@@ -544,20 +515,13 @@ impl App {
             .spacing(SPACING),
         );
 
-        container(
-            row![
-                left,
-                scrollable(right.padding(iced::Padding {
-                    right: 16.0,
-                    ..iced::Padding::ZERO
-                }))
-                .width(Fill)
-            ]
-            .spacing(SPACING * 2.0),
+        shell(
+            left.into(),
+            scrollable(right.padding(iced::Padding {
+                right: 16.0,
+                ..iced::Padding::ZERO
+            }))
+            .into(),
         )
-        .padding(PAD)
-        .width(Fill)
-        .height(Fill)
-        .into()
     }
 }

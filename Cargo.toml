@@ -1,15 +1,24 @@
-[workspace]
-resolver = "2"
-members = ["common", "protonup", "flatseal"]
-
-[workspace.package]
+[package]
+name = "steamdeck"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Gucixdev"]
 repository = "https://github.com/Gucixdev/steamdeck"
+description = "ProtonUp and Flatseal for the Steam Deck as single binaries"
 
-[workspace.dependencies]
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "protonup"
+path = "src/protonup.rs"
+
+[[bin]]
+name = "flatseal"
+path = "src/flatseal.rs"
+
+[dependencies]
 iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "wayland", "x11", "thread-pool", "crisp"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 serde = { version = "1", features = ["derive"] }

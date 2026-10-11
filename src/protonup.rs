@@ -1,10 +1,9 @@
 //! protonup: Proton-GE manager for the Steam Deck. One binary: no arguments opens the window, with
 //! arguments it is a command line tool.
-mod gui;
 
-use protonup::{github, install, sources, steam};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use steamdeck::{github, install, sources, steam};
 
 macro_rules! say {
     ($($a:tt)*) => {{
@@ -17,7 +16,7 @@ const HELP: &str = "\
 protonup - install and remove Proton-GE and other compatibility tools for Steam
 
 usage:
-  protonup                       open the window
+  protonup [gui [TAB]]           open the window (TAB: installed, available, games)
   protonup sources               the tools it can fetch
   protonup list [-n N | --all]   releases of a source (default 15), installed ones marked
   protonup installed             what is in the compatibility tools directory
@@ -25,6 +24,8 @@ usage:
   protonup install --all [--yes] every release of the source that is not installed yet
   protonup remove NAME           remove an installed tool (its directory name)
   protonup path                  the directory used for installs
+  protonup games                 installed games and the tool each one uses
+  protonup use APPID TOOL        run a game with TOOL (a name from `installed`), or `default`; Steam must be closed
 
 options:
   --source ID                    ge (default), cachyos, cachyos-v3, rtsp, sarek, northstar, luxtorpeda
@@ -111,17 +112,65 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        "gui" => match gui::run(dir_path, dir.is_some()) {
+        "gui" => match steamdeck::proton_gui::run(dir_path, dir.is_some(), args.get(1).cloned()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(e),
         },
+        "games" => {
+            let Some(root) = dir_path.parent() else {
+                return fail("no Steam root");
+            };
+            let map = steamdeck::games::mapping(root);
+            let tool = |id: u64| {
+                map.get(&id)
+                    .map(String::as_str)
+                    .unwrap_or("(Steam default)")
+                    .to_string()
+            };
+            say!("{:>9}  {:<40} {}", 0, "all games", tool(0));
+            for g in steamdeck::games::games(root) {
+                say!("{:>9}  {:<40} {}", g.appid, g.name, tool(g.appid));
+            }
+            ExitCode::SUCCESS
+        }
+        "use" => {
+            let (Some(id), Some(tool)) = (args.get(1), args.get(2)) else {
+                return fail("use needs APPID TOOL|default");
+            };
+            let Ok(appid) = id.parse::<u64>() else {
+                return fail("APPID is a number (see `protonup games`)");
+            };
+            let Some(root) = dir_path.parent() else {
+                return fail("no Steam root");
+            };
+            let chosen = if tool == "default" {
+                None
+            } else {
+                let have = install::list_installed(&dir_path);
+                match have.iter().find(|i| &i.name == tool || &i.tool == tool) {
+                    Some(i) => Some(i.tool.clone()),
+                    None => {
+                        return fail(format!(
+                            "'{tool}' is not installed here (see `protonup installed`)"
+                        ))
+                    }
+                }
+            };
+            match steamdeck::games::set_tool(root, appid, chosen.as_deref()) {
+                Ok(()) => {
+                    say!("{appid}: {}", chosen.as_deref().unwrap_or("Steam default"));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(e),
+            }
+        }
         "installed" => {
             let l = install::list_installed(&dir_path);
             if l.is_empty() {
                 say!("nothing installed in {}", dir_path.display());
             }
             for i in l {
-                say!("{:<44} {}", i.name, deck_common::human_bytes(i.size));
+                say!("{:<44} {}", i.name, steamdeck::ui::human_bytes(i.size));
             }
             ExitCode::SUCCESS
         }
@@ -144,7 +193,7 @@ fn main() -> ExitCode {
                     for r in rs {
                         let size = r
                             .archive(src)
-                            .map(|a| deck_common::human_bytes(a.size))
+                            .map(|a| steamdeck::ui::human_bytes(a.size))
                             .unwrap_or_default();
                         let mark = if have.contains(&r.dir_name(src)) {
                             "installed"
@@ -209,7 +258,7 @@ fn main() -> ExitCode {
                     "{} releases of {} not installed yet, {} to download (more once unpacked)",
                     todo.len(),
                     src.name,
-                    deck_common::human_bytes(total)
+                    steamdeck::ui::human_bytes(total)
                 );
                 if !yes {
                     print!("continue? [y/N] ");
@@ -285,8 +334,8 @@ fn main() -> ExitCode {
                             "\r  queue: {}/{} done   {} / {}   -j{}  ",
                             finished.load(ord),
                             todo.len(),
-                            deck_common::human_bytes(have),
-                            deck_common::human_bytes(want),
+                            steamdeck::ui::human_bytes(have),
+                            steamdeck::ui::human_bytes(want),
                             jobs
                         );
                     }
