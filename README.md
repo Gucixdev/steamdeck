@@ -1,15 +1,17 @@
 # steamdeck
 
-One small program for the Steam Deck that does not drag Qt, Python or GTK along: **ProtonUp**, **Flatseal**
-and **System** setup in a single window, in Steam's colours. Rust and iced, one binary (about 15 MB), plus
+One small program for the Steam Deck that does not drag Qt, Python or GTK along: **ProtonUp** and **Flatseal**
+in a single window, in Steam's colours, plus a `setup` wizard for the system tweaks. Rust and iced, one binary (about 15 MB), plus
 two bash files: `setup` (a wizard) and `run` (build, install, start).
 
 | | what |
 |---|---|
-| Home | tiles saying what each tab is for, Update Protons, and a warning when two Steam installs are found |
-| ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
-| Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
-| Settings | Scripts (your own scripts and three read-only ones, with their output), Health check (what games like against what is set, recent crashes), Flatpak apps (uninstall, clear data, unused runtimes), Steam installs (remove one), System (OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`) and Log (`~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic) |
+| Home | action tiles: Update Protons, Update Flatpak apps, and a warning when two Steam installs are found |
+| ProtonUp | **Proton for my games** (a Proton and launch options per game, every Steam install on one list) and **Download Proton** (Proton-GE, Proton-CachyOS, Proton-EM, Luxtorpeda and more) |
+| Flatseal | **Permissions** (default / on / off, portals, PipeWire, filesystems, buses, environment) and **Uninstall / clear data** (Flatpak apps, leftovers of removed ones) |
+| Log | `~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did, every error and panic |
+
+System tweaks (OOM guard, memory settings for zram, swap file size, ssh) live in `setup`, see below.
 
 The window is [iced](https://iced.rs) drawn on the GPU with a software fallback, plain Wayland/X11, rustls
 for HTTPS, pure-Rust gzip and xz.
@@ -41,11 +43,11 @@ For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick Stea
 setup                     the wizard: programs, system, Firefox (asks, confirms, applies)
 run                       build when src changed, install, start; --publish TAG makes the release
 src/main.rs               steamdeck [protonup|flatseal ...] command lines, no arguments = the window
-src/launcher.rs           the window: ProtonUp, Flatseal, System, Log
+src/launcher.rs           the window: Home, ProtonUp, Flatseal, Log
 src/ui.rs                 theme (Steam colours) and the layout every section uses: sidebar + main area
 src/proton_gui.rs  cli_protonup.rs  github.rs install.rs sources.rs steam.rs games.rs
 src/seal_gui.rs    cli_flatseal.rs  flatpak.rs keyfile.rs perms.rs portals.rs
-src/system.rs log.rs      System section (runs the embedded setup script), the log file
+src/system.rs log.rs      the embedded setup script, the log file
 ```
 
 One Cargo package, one `src`, one binary. `protonup` and `flatseal` are symlinks to it.
@@ -121,7 +123,7 @@ and system bus policies and environment variables are covered.
 
 `./setup` is a wizard: it asks whether to install the programs (and the weekly Proton-GE update), the OOM
 guard, the memory settings (and the swappiness value), a new swap file size, and ssh; it shows the list
-and applies it only after you confirm. The actions below are what the System section and `setup --system` do: `setup --system oom`, `setup --system swapfile 16G`, `setup --system undo`.
+and applies it only after you confirm. The actions below are what `setup --system` does: `setup --system oom`, `setup --system swapfile 16G`, `setup --system undo`.
 
 | action | what it writes (all under `/etc`, which survives SteamOS updates) |
 |---|---|
@@ -154,7 +156,7 @@ portal store, and the per-game Proton with its backup. No clicking by hand is ne
 
 ```sh
 ./run                   # builds when src/ changed, installs into ~/.local/bin, opens the window
-./run protonup          # the same, opened on ProtonUp (flatseal, system, log)
+./run protonup          # the same, opened on ProtonUp (flatseal, log)
 ./run --release         # optimised build
 ./run --publish v0.2.0  # portable build (glibc 2.36 via zig) and a GitHub release for ./setup to download
 cargo test              # unit and end-to-end tests (a local HTTP server stands in for GitHub)
@@ -173,7 +175,7 @@ been exercised on one. `setup --system status` and `setup --system undo` are saf
 
 Not done: the apps cannot be driven by the Deck's gamepad directly (they take touch and the trackpads;
 as a non-Steam game Steam Input maps the pads to the mouse), no DXVK/VKD3D downloads for Lutris/Heroic,
-no Proton-EM and DW-Proton (not on GitHub).
+no DW-Proton (not on GitHub).
 
 ## Licence
 
