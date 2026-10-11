@@ -469,12 +469,78 @@ fn the_other_pages_are_not_offered() {
 #[test]
 fn the_data_of_a_removed_app_can_be_cleared_and_nothing_else_goes() {
     let w = world();
-    let mut win = Window::open(Start { section: Section::Apps, ..Start::default() });
+    let mut win = Window::open(Start {
+        section: Section::Apps,
+        ..Start::default()
+    });
     assert!(win.has("data of a removed app"));
     // the leftover is the third row (two installed apps come first); asking for it is what its button does
-    win.feed(vec![Msg::Apps(steamdeck::flatapps::Msg::Ask(2, steamdeck::flatapps::Action::DeleteData))]);
+    win.feed(vec![Msg::Apps(steamdeck::flatapps::Msg::Ask(
+        2,
+        steamdeck::flatapps::Action::DeleteData,
+    ))]);
     win.click("Yes");
     assert!(!w.home.join(".var/app/org.gone.Gone").exists());
     assert!(w.home.join(".var/app/org.a.A/config/data").is_file());
     assert!(w.home.join(".var/app/org.b.B/config/data").is_file());
+}
+
+#[test]
+fn big_pages_draw_fast_enough_not_to_stutter() {
+    let w = world();
+    // 250 apps and 250 games: far more than a real Deck has
+    let mut apps = String::new();
+    for i in 0..250 {
+        apps.push_str(&format!("org.big.App{i}\tBig App {i}\t{i} MB\tuser\n"));
+        let d = w
+            .home
+            .join(".var/app")
+            .join(format!("org.big.App{i}/config"));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("f"), "x").unwrap();
+    }
+    fs::write(w.fp.join("apps"), apps).unwrap();
+    let steam = w.home.join(".local/share/Steam");
+    for i in 0..250 {
+        fs::write(
+            steam.join(format!("steamapps/appmanifest_{}.acf", 1000 + i)),
+            format!(
+                "\"AppState\"\n{{\n\t\"appid\"\t\t\"{}\"\n\t\"name\"\t\t\"Game {i}\"\n}}\n",
+                1000 + i
+            ),
+        )
+        .unwrap();
+    }
+    let mut time = |win: &mut Window| {
+        let t = std::time::Instant::now();
+        for _ in 0..3 {
+            let sim = tall(win.app.view());
+            drop(sim);
+        }
+        t.elapsed().as_millis() / 3
+    };
+    let mut apps_page = Window::open(Start {
+        section: Section::Apps,
+        ..Start::default()
+    });
+    let mut games_page = Window::open(Start {
+        section: Section::Games,
+        ..Start::default()
+    });
+    let mut get_page = Window::open(Start {
+        section: Section::Get,
+        ..Start::default()
+    });
+    // the first render of a process loads fonts and shapes text: not what a user feels page to page
+    drop(tall(apps_page.app.view()));
+    let a = time(&mut apps_page);
+    let g = time(&mut games_page);
+    let d = time(&mut get_page);
+    eprintln!("draw time (ms): apps {a}, games {g}, download {d}");
+    for (name, ms) in [("Flatpak apps", a), ("Games", g), ("Download", d)] {
+        assert!(
+            ms < 400,
+            "{name} page takes {ms} ms to build and lay out: it would stutter"
+        );
+    }
 }

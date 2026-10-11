@@ -122,11 +122,11 @@ impl App {
         };
         let (proton, pt) = proton_gui::App::new(dir, pinned, proton_tab);
         let (seal, st) = seal_gui::App::new(start.app.clone());
-        let (system, yt) = system::State::new();
-        let (steam, wt) = steaminstalls::State::new();
+        let (system, _yt) = system::State::new();
+        let (steam, _wt) = steaminstalls::State::new();
         let (apps, at) = flatapps::State::new();
-        let (health, ht) = health::State::new();
-        let (storage, gt) = storage_gui::State::new();
+        let (health, _ht) = health::State::new();
+        let (storage, _gt) = storage_gui::State::new();
         let section = match (start.section, start.tab.as_deref()) {
             (Section::Games, Some("available")) => Section::Get,
             (Section::Games, Some("installed")) => Section::Installed,
@@ -149,15 +149,9 @@ impl App {
         };
         (
             app,
-            Task::batch([
-                pt.map(Msg::Proton),
-                st.map(Msg::Seal),
-                yt.map(Msg::System),
-                at.map(Msg::Apps),
-                ht.map(Msg::Health),
-                gt.map(Msg::Storage),
-                wt.map(Msg::Steam),
-            ]),
+            // only what the two offered tools need at start; the pages that are not offered
+            // (system status, health, storage sizes, Steam installs) are not scanned in the background
+            Task::batch([pt.map(Msg::Proton), st.map(Msg::Seal), at.map(Msg::Apps)]),
         )
     }
 

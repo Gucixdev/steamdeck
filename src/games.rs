@@ -297,6 +297,26 @@ pub fn mapping_checked(root: &Path) -> Result<HashMap<u64, String>, String> {
     }
 }
 
+/// Same answer as `steam_running`, at most one /proc scan every two seconds: for drawing the window,
+/// which asks on every frame. Anything that writes a file must call `steam_running` itself.
+pub fn steam_running_cached() -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static LAST: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    if std::env::var("STEAMDECK_STEAM_RUNNING").is_ok() {
+        return steam_running();
+    }
+    let mut g = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((t, v)) = *g {
+        if t.elapsed() < Duration::from_secs(2) {
+            return v;
+        }
+    }
+    let v = steam_running();
+    *g = Some((Instant::now(), v));
+    v
+}
+
 /// True when a Steam client process is running (it would overwrite config.vdf on exit).
 pub fn steam_running() -> bool {
     // lets the interface tests run on a machine where Steam happens to be open

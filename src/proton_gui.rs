@@ -802,7 +802,7 @@ impl App {
     /// A table of every game in every Steam install with the Proton it runs with.
     fn games_view(&self) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(4);
-        if games::steam_running() {
+        if games::steam_running_cached() {
             col = col.push(
                 text("Steam is running: close it completely (Steam > Exit) before changing a game, or Steam undoes the change.")
                     .size(SMALL_SIZE)

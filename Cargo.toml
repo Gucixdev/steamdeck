@@ -33,8 +33,14 @@ panic = "abort"
 strip = true
 
 # faster dev builds: no debug info for our own crate (stack traces and panics still have file:line)
+# the window is drawn by dependencies (iced, wgpu, the text and image code): optimised even in a dev
+# build, otherwise the tables with hundreds of rows stutter. Our own crate stays quick to build.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.dev.package.steamdeck]
 debug = "line-tables-only"
+opt-level = 1
 
 [dev-dependencies]
 iced_test = "0.14"
