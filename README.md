@@ -146,9 +146,10 @@ Use `--portable` for releases: a plain build needs the glibc of the machine it w
 
 ## Development
 
-`./run` rebuilds what changed and starts a program straight away: `./run` asks which one,
-`./run flatseal show org.mozilla.firefox` passes arguments through, `./run --release protonup` uses the
-optimised build. `./build` makes the distributable binaries (`--portable` for the release).
+`./run` builds both programs when something in `src/` changed (otherwise it starts at once), then asks
+which one to start; `./run flatseal` skips the question, `./run --release` uses the optimised build. It
+passes no arguments on, use `target/debug/protonup ...` for those. `./build` makes the distributable
+binaries (`--portable` for the release).
 
 ## Status
 

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# run - rebuild what changed and start one of the programs right away (a development shortcut).
+# run - build both programs (only when the code changed), then start the one you pick.
 #
-#   ./run                  asks which one
-#   ./run protonup [ARGS]  build protonup, run it with ARGS
-#   ./run flatseal [ARGS]  build flatseal, run it with ARGS
+#   ./run                  builds if needed, asks which one to start
+#   ./run protonup         builds if needed, starts protonup (no arguments are passed on)
+#   ./run flatseal         the same for flatseal
 #   ./run --release ...    optimised build instead of the quick debug one
+#
+# A build is skipped when no file in src/ or the Cargo files is newer than the binaries, so a repeated
+# ./run starts immediately; after an edit it rebuilds both and starts the chosen one.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
@@ -17,11 +20,27 @@ if [ "${1:-}" = --release ]; then
 fi
 
 PROGS=(protonup flatseal)
+TARGET=${CARGO_TARGET_DIR:-target}/$PROFILE
+
+stale=0
+for p in "${PROGS[@]}"; do
+	bin=$TARGET/$p
+	if [ ! -x "$bin" ] || [ -n "$(find src Cargo.toml Cargo.lock -newer "$bin" -print -quit 2>/dev/null)" ]; then
+		stale=1
+	fi
+done
+if [ "$stale" = 1 ]; then
+	echo "run: building ${PROGS[*]} ($PROFILE)" >&2
+	cargo build -q --bins "${FLAGS[@]}"
+else
+	echo "run: build is up to date" >&2
+fi
+
 prog=${1:-}
 if [ -z "$prog" ]; then
 	i=1
 	for p in "${PROGS[@]}"; do
-		printf '  %d) %s\n' "$i" "$p"
+		printf '  %d) %s\n' "$i" "$p" >&2
 		i=$((i + 1))
 	done
 	read -rp "run which? " n
@@ -36,8 +55,4 @@ case " ${PROGS[*]} " in
 	*" $prog "*) ;;
 	*) echo "run: unknown program '$prog' (${PROGS[*]})" >&2; exit 2 ;;
 esac
-
-# the target dir may be set elsewhere (CARGO_TARGET_DIR); ask cargo instead of guessing
-cargo build -q --bin "$prog" "${FLAGS[@]}"
-target=${CARGO_TARGET_DIR:-$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')}
-exec "$target/$PROFILE/$prog" "$@"
+exec "$TARGET/$prog"
