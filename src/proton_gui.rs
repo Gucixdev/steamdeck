@@ -5,10 +5,10 @@ use crate::github::Release;
 use crate::install::{self, Installed, Progress};
 use crate::sources::{self, Source, SOURCES};
 use crate::ui::{
-    danger_button, human_bytes, quiet_button, AMBER, DIM, GREEN, PAD, ACCENT,
-    RED, SMALL_SIZE, SPACING, TEXT_SIZE,
+    danger_button, human_bytes, quiet_button, ACCENT, AMBER, DIM, GREEN, PAD, RED, SMALL_SIZE,
+    SPACING, TEXT_SIZE,
 };
-use crate::ui::{heading, item, nav_item, primary_button};
+use crate::ui::{heading, nav_item, primary_button, table_header, table_row};
 use crate::{github, steam};
 use iced::widget::{
     button, column, pick_list, progress_bar, row, scrollable, space, text, text_input, Column,
@@ -36,6 +36,9 @@ pub enum Msg {
     SetTool(PathBuf, u64, String),
     ToolSet(Result<(), String>),
     Refresh,
+    /// install the newest release of every kind of Proton that is installed (or Proton-GE if none)
+    UpdateAll,
+    UpdateLoaded(&'static str, Result<(Vec<Release>, bool), String>),
     LoadMore,
     Loaded(&'static str, usize, Result<(Vec<Release>, bool), String>),
     Install(String),
@@ -59,6 +62,28 @@ pub struct RootInfo {
     installed: Vec<Installed>,
     games: Vec<Game>,
     mapping: HashMap<u64, String>,
+}
+
+/// Which source a directory name belongs to, for "update all".
+fn family(name: &str) -> Option<&'static str> {
+    let n = name.to_lowercase();
+    if n.starts_with("ge-proton") {
+        Some("ge")
+    } else if n.starts_with("proton-cachyos") {
+        Some(if n.contains("v3") {
+            "cachyos-v3"
+        } else {
+            "cachyos"
+        })
+    } else if n.contains("sarek") {
+        Some("sarek")
+    } else if n.contains("northstar") {
+        Some("northstar")
+    } else if n.contains("luxtorpeda") {
+        Some("luxtorpeda")
+    } else {
+        None
+    }
 }
 
 fn root_label(root: &std::path::Path) -> String {
@@ -214,6 +239,52 @@ impl App {
     pub fn update(&mut self, m: Msg) -> Task<Msg> {
         match m {
             Msg::Tab(t) => self.tab = t,
+            Msg::UpdateAll => {
+                self.error = None;
+                self.notice = Some("Checking for newer Protons...".into());
+                let mut ids: Vec<&'static str> = Vec::new();
+                for i in &self.installed {
+                    if let Some(id) = family(&i.name) {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+                if ids.is_empty() {
+                    ids.push("ge");
+                }
+                let tasks: Vec<Task<Msg>> = ids
+                    .into_iter()
+                    .filter_map(sources::find)
+                    .map(|src| {
+                        Task::perform(async move { github::releases_page(src, 1, 5) }, move |r| {
+                            Msg::UpdateLoaded(src.id, r)
+                        })
+                    })
+                    .collect();
+                return Task::batch(tasks);
+            }
+            Msg::UpdateLoaded(id, r) => match (sources::find(id), r) {
+                (Some(src), Ok((rels, _))) => {
+                    let have: Vec<String> = self.installed.iter().map(|i| i.name.clone()).collect();
+                    // the newest release only (the list is newest first)
+                    if let Some(r) = rels.into_iter().find(|r| r.archive(src).is_some()) {
+                        if !have.contains(&r.dir_name(src))
+                            && !self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
+                        {
+                            self.notice = Some(format!("Installing {} ...", r.tag_name));
+                            self.queue.push_back((src, r));
+                            self.queue_total += 1;
+                            return self.start_next();
+                        }
+                    }
+                    if self.busy.is_empty() && self.queue.is_empty() {
+                        self.notice = Some("Everything is up to date.".into());
+                    }
+                }
+                (_, Err(e)) => self.error = Some(e),
+                _ => {}
+            },
             Msg::GameFilter(q) => self.game_filter = q,
             Msg::SourceName(n) => {
                 if let Some(s) = SOURCES.iter().find(|s| s.name == n) {
@@ -231,19 +302,25 @@ impl App {
                 self.notice = None;
                 return Task::perform(
                     async move {
-                        let t = if tool.is_empty() { None } else { Some(tool.as_str()) };
+                        let t = if tool.is_empty() {
+                            None
+                        } else {
+                            Some(tool.as_str())
+                        };
                         games::set_tool(&root, appid, t)
                     },
                     Msg::ToolSet,
                 );
             }
-            Msg::ToolSet(r) => match r {
-                Ok(()) => {
-                    self.notice = Some("Saved. Start Steam again; the game uses this tool from its next launch.".into());
-                    return self.load_all();
+            Msg::ToolSet(r) => {
+                match r {
+                    Ok(()) => {
+                        self.notice = Some("Saved. Start Steam again; the game uses this tool from its next launch.".into());
+                        return self.load_all();
+                    }
+                    Err(e) => self.error = Some(e),
                 }
-                Err(e) => self.error = Some(e),
-            },
+            }
             Msg::Source(id) => {
                 if let Some(s) = sources::find(id) {
                     self.source = s;
@@ -283,7 +360,12 @@ impl App {
                 }
             }
             Msg::UseLabel(l) => {
-                if let Some(d) = self.dirs.iter().find(|d| root_label(d.parent().unwrap_or(d)) == l).cloned() {
+                if let Some(d) = self
+                    .dirs
+                    .iter()
+                    .find(|d| root_label(d.parent().unwrap_or(d)) == l)
+                    .cloned()
+                {
                     return self.update(Msg::UseDir(d));
                 }
             }
@@ -376,9 +458,21 @@ impl App {
     /// The navigation entries of this section, for the launcher's single sidebar.
     pub fn side(&self, active: bool) -> Element<'_, Msg> {
         column![
-            nav_item("Installed", active && self.tab == Tab::Installed, Msg::Tab(Tab::Installed)),
-            nav_item("Available", active && self.tab == Tab::Available, Msg::Tab(Tab::Available)),
-            nav_item("Games", active && self.tab == Tab::Games, Msg::Tab(Tab::Games)),
+            nav_item(
+                "Installed",
+                active && self.tab == Tab::Installed,
+                Msg::Tab(Tab::Installed)
+            ),
+            nav_item(
+                "Available",
+                active && self.tab == Tab::Available,
+                Msg::Tab(Tab::Available)
+            ),
+            nav_item(
+                "Games",
+                active && self.tab == Tab::Games,
+                Msg::Tab(Tab::Games)
+            ),
         ]
         .spacing(8)
         .into()
@@ -432,24 +526,34 @@ impl App {
             let names: Vec<&'static str> = SOURCES.iter().map(|s| s.name).collect();
             let mut r = row![
                 text("Category").size(SMALL_SIZE).color(DIM),
-                pick_list(names, Some(self.source.name), Msg::SourceName).text_size(SMALL_SIZE).padding(10),
+                pick_list(names, Some(self.source.name), Msg::SourceName)
+                    .text_size(SMALL_SIZE)
+                    .padding(10),
             ]
             .spacing(SPACING)
             .align_y(iced::Alignment::Center);
             if self.dirs.len() > 1 {
-                let labels: Vec<String> = self.dirs.iter().map(|d| root_label(d.parent().unwrap_or(d))).collect();
+                let labels: Vec<String> = self
+                    .dirs
+                    .iter()
+                    .map(|d| root_label(d.parent().unwrap_or(d)))
+                    .collect();
                 let cur = root_label(self.dir.parent().unwrap_or(&self.dir));
                 r = r.push(text("Install into").size(SMALL_SIZE).color(DIM));
-                r = r.push(pick_list(labels, Some(cur), Msg::UseLabel).text_size(SMALL_SIZE).padding(10));
+                r = r.push(
+                    pick_list(labels, Some(cur), Msg::UseLabel)
+                        .text_size(SMALL_SIZE)
+                        .padding(10),
+                );
             }
             top = top.push(r);
         }
         column![top, body].spacing(SPACING).into()
     }
 
-    /// Every Steam install on one list: what is where, with its games below it.
+    /// A table of every game in every Steam install with the Proton it runs with.
     fn games_view(&self) -> Element<'_, Msg> {
-        let mut col = Column::new().spacing(10);
+        let mut col = Column::new().spacing(4);
         if games::steam_running() {
             col = col.push(
                 text("Steam is running: close it completely (Steam > Exit) before changing a game, or Steam undoes the change.")
@@ -463,11 +567,27 @@ impl App {
                 .padding(10)
                 .size(SMALL_SIZE),
         );
+        col = col.push(table_header(&[("Game", 4), ("Steam", 2), ("Proton", 3)]));
         const DEFAULT: &str = "Steam default";
         let q = self.game_filter.to_lowercase();
+        let mut n = 0usize;
         for r in &self.all {
-            col = col.push(heading(format!("{}  {}", r.label, r.root.display())));
-            let row_for = |appid: u64, name: &str| -> Element<'_, Msg> {
+            let short = r
+                .label
+                .trim_start_matches("Steam ")
+                .trim_matches(|c| c == '(' || c == ')')
+                .to_string();
+            let mut rows: Vec<(u64, String)> = Vec::new();
+            if q.is_empty() {
+                rows.push((0, "All games (default)".to_string()));
+            }
+            rows.extend(
+                r.games
+                    .iter()
+                    .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
+                    .map(|g| (g.appid, g.name.clone())),
+            );
+            for (appid, name) in rows {
                 let cur = r.mapping.get(&appid).cloned();
                 let mut options: Vec<String> = vec![DEFAULT.to_string()];
                 options.extend(r.installed.iter().map(|i| i.tool.clone()));
@@ -478,33 +598,38 @@ impl App {
                 }
                 let selected = cur.unwrap_or_else(|| DEFAULT.to_string());
                 let root = r.root.clone();
-                item(
-                    name.to_string(),
-                    if appid == 0 { "every game without a choice of its own".to_string() } else { format!("app {appid}") },
-                    pick_list(options, Some(selected), move |t| {
-                        Msg::SetTool(root.clone(), appid, if t == DEFAULT { String::new() } else { t })
-                    })
-                    .text_size(SMALL_SIZE)
-                    .padding(10)
-                    .into(),
-                )
-            };
-            if q.is_empty() {
-                col = col.push(row_for(0, "All games"));
-            }
-            if r.games.is_empty() {
-                col = col.push(text("no installed games found here").size(SMALL_SIZE).color(DIM));
-            }
-            for g in r.games.iter().filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q)) {
-                col = col.push(row_for(g.appid, &g.name));
+                let dropdown = pick_list(options, Some(selected), move |t| {
+                    Msg::SetTool(
+                        root.clone(),
+                        appid,
+                        if t == DEFAULT { String::new() } else { t },
+                    )
+                })
+                .text_size(SMALL_SIZE)
+                .padding(8)
+                .width(Fill);
+                col = col.push(table_row(
+                    vec![
+                        (text(name).size(TEXT_SIZE).into(), 4),
+                        (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 2),
+                        (dropdown.into(), 3),
+                    ],
+                    n % 2 == 1,
+                ));
+                n += 1;
             }
         }
         if self.all.is_empty() {
             col = col.push(text("Looking for Steam...").size(TEXT_SIZE).color(DIM));
+        } else if n == 0 {
+            col = col.push(text("No installed games found.").size(TEXT_SIZE).color(DIM));
         }
-        scrollable(col.padding(iced::Padding { right: 16.0, ..iced::Padding::ZERO }))
-            .height(Fill)
-            .into()
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
     }
 
     /// What is installed, in every Steam install, on one list.
@@ -518,7 +643,8 @@ impl App {
             }
             for i in &r.installed {
                 any = true;
-                let confirm = self.confirm_remove.as_ref() == Some(&(r.tools.clone(), i.name.clone()));
+                let confirm =
+                    self.confirm_remove.as_ref() == Some(&(r.tools.clone(), i.name.clone()));
                 let actions: Element<Msg> = if confirm {
                     row![
                         text("Remove?").size(TEXT_SIZE).color(AMBER),
@@ -526,7 +652,10 @@ impl App {
                             .padding(PAD)
                             .on_press(Msg::Remove(r.tools.clone(), i.name.clone()))
                             .style(danger_button()),
-                        button(text("Cancel").size(TEXT_SIZE)).padding(PAD).on_press(Msg::CancelRemove).style(quiet_button()),
+                        button(text("Cancel").size(TEXT_SIZE))
+                            .padding(PAD)
+                            .on_press(Msg::CancelRemove)
+                            .style(quiet_button()),
                     ]
                     .spacing(SPACING)
                     .align_y(iced::Alignment::Center)
@@ -553,11 +682,18 @@ impl App {
         if self.all.is_empty() {
             col = col.push(text("Looking for Steam...").size(TEXT_SIZE).color(DIM));
         } else if !any {
-            col = col.push(text("Nothing installed yet. Open Available and install a tool.").size(TEXT_SIZE).color(DIM));
+            col = col.push(
+                text("Nothing installed yet. Open Available and install a tool.")
+                    .size(TEXT_SIZE)
+                    .color(DIM),
+            );
         }
-        scrollable(col.padding(iced::Padding { right: 16.0, ..iced::Padding::ZERO }))
-            .height(Fill)
-            .into()
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
     }
 
     fn available_view(&self) -> Element<'_, Msg> {
@@ -635,38 +771,73 @@ impl App {
             );
         }
 
-        let mut col = Column::new().spacing(8);
-        for r in &l.releases {
+        let mut col = Column::new().spacing(4);
+        col = col.push(table_header(&[
+            ("Version", 4),
+            ("Released", 2),
+            ("Size", 2),
+            ("", 3),
+        ]));
+        for (n, r) in l.releases.iter().enumerate() {
             let size = r
                 .archive(src)
                 .map(|a| human_bytes(a.size))
                 .unwrap_or_default();
-            let has = have.contains(&r.dir_name(src).as_str())
-                && !matches!(src.dir, sources::DirName::Fixed(_));
+            let dirname = r.dir_name(src);
+            let has =
+                have.contains(&dirname.as_str()) && !matches!(src.dir, sources::DirName::Fixed(_));
             let queued = self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
                 || self.busy.iter().any(|b| b.tag == r.tag_name);
             let action: Element<Msg> = if has {
-                text("installed").size(SMALL_SIZE).color(ACCENT).into()
+                if self.confirm_remove.as_ref() == Some(&(self.dir.clone(), dirname.clone())) {
+                    row![
+                        button(text("Remove").size(SMALL_SIZE))
+                            .padding([6, 12])
+                            .on_press(Msg::Remove(self.dir.clone(), dirname.clone()))
+                            .style(danger_button()),
+                        button(text("No").size(SMALL_SIZE))
+                            .padding([6, 12])
+                            .on_press(Msg::CancelRemove)
+                            .style(quiet_button()),
+                    ]
+                    .spacing(6)
+                    .into()
+                } else {
+                    row![
+                        text("installed").size(SMALL_SIZE).color(ACCENT),
+                        button(text("remove").size(SMALL_SIZE))
+                            .padding([4, 10])
+                            .on_press(Msg::AskRemove(self.dir.clone(), dirname.clone()))
+                            .style(quiet_button()),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+                }
             } else if queued {
                 text("queued").size(SMALL_SIZE).color(AMBER).into()
             } else {
-                button(text("Install").size(TEXT_SIZE))
-                    .padding(PAD)
+                button(text("Install").size(SMALL_SIZE))
+                    .padding([6, 16])
                     .on_press(Msg::Install(r.tag_name.clone()))
                     .style(primary_button())
                     .into()
             };
-            col = col.push(
-                row![
-                    text(r.tag_name.clone()).size(TEXT_SIZE),
-                    text(r.date().to_string()).size(SMALL_SIZE).color(DIM),
-                    space::horizontal(),
-                    text(size).size(SMALL_SIZE).color(DIM),
-                    action,
-                ]
-                .spacing(SPACING)
-                .align_y(iced::Alignment::Center),
-            );
+            col = col.push(table_row(
+                vec![
+                    (text(r.tag_name.clone()).size(TEXT_SIZE).into(), 4),
+                    (
+                        text(r.date().to_string())
+                            .size(SMALL_SIZE)
+                            .color(DIM)
+                            .into(),
+                        2,
+                    ),
+                    (text(size).size(SMALL_SIZE).color(DIM).into(), 2),
+                    (action, 3),
+                ],
+                n % 2 == 1,
+            ));
         }
         if l.more {
             let label = if l.loading {

@@ -1,9 +1,9 @@
 //! protonup: Proton-GE manager for the Steam Deck. One binary: no arguments opens the window, with
 //! arguments it is a command line tool.
 
+use crate::{github, install, sources, steam};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use crate::{github, install, sources, steam};
 
 macro_rules! say {
     ($($a:tt)*) => {{
@@ -111,7 +111,12 @@ pub fn run(mut args: Vec<String>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        "gui" => match crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Games, dir: dir.is_some().then(|| dir_path.clone()), tab: args.get(1).cloned(), app: None }) {
+        "gui" => match crate::launcher::run(crate::launcher::Start {
+            section: crate::launcher::Section::Games,
+            dir: dir.is_some().then(|| dir_path.clone()),
+            tab: args.get(1).cloned(),
+            app: None,
+        }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(e),
         },

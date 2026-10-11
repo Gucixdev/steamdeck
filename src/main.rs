@@ -25,14 +25,17 @@ fn main() -> ExitCode {
                     Some("log") => steamdeck::launcher::Section::Log,
                     _ => steamdeck::launcher::Section::Home,
                 };
-                return match steamdeck::launcher::run(steamdeck::launcher::Start { section, ..Default::default() }) {
+                return match steamdeck::launcher::run(steamdeck::launcher::Start {
+                    section,
+                    ..Default::default()
+                }) {
                     Ok(()) => ExitCode::SUCCESS,
                     Err(e) => {
                         steamdeck::log::write("launcher", &format!("window failed: {e}"));
                         eprintln!("steamdeck: {e}");
                         ExitCode::FAILURE
                     }
-                }
+                };
             }
         },
     };

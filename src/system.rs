@@ -26,8 +26,18 @@ pub struct State {
 
 impl State {
     pub fn new() -> (Self, Task<Msg>) {
-        let s = State { output: String::new(), busy: true, swappiness: "100".into(), swap: "8G".into() };
-        (s, Task::perform(async { run_actions(vec!["status".into()]) }, |(a, o)| Msg::Done(a, o)))
+        let s = State {
+            output: String::new(),
+            busy: true,
+            swappiness: "100".into(),
+            swap: "8G".into(),
+        };
+        (
+            s,
+            Task::perform(async { run_actions(vec!["status".into()]) }, |(a, o)| {
+                Msg::Done(a, o)
+            }),
+        )
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -53,27 +63,50 @@ impl State {
     }
 
     pub fn view(&self) -> Element<'_, Msg> {
-        let go = |label: &'static str, args: Vec<String>| segment(label, false, false, Msg::Run(args));
-        let ok_swappiness = self.swappiness.parse::<u32>().map(|n| n <= 200).unwrap_or(false);
+        let go =
+            |label: &'static str, args: Vec<String>| segment(label, false, false, Msg::Run(args));
+        let ok_swappiness = self
+            .swappiness
+            .parse::<u32>()
+            .map(|n| n <= 200)
+            .unwrap_or(false);
         let ok_swap = {
             let t = self.swap.trim_end_matches(['G', 'g', 'M', 'm']);
             !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) && self.swap.len() > t.len()
         };
         let mut col = column![
             heading("System"),
-            text("Changes only /etc, so they survive SteamOS updates. Asks for your password.").size(SMALL_SIZE).color(DIM),
+            text("Changes only /etc, so they survive SteamOS updates. Asks for your password.")
+                .size(SMALL_SIZE)
+                .color(DIM),
             item(
                 "OOM guard",
                 "kill the game instead of freezing the Deck when memory runs out",
-                row![go("set up", vec!["oom".into()]), go("remove", vec!["undo".into()])].spacing(8).into()
+                row![
+                    go("set up", vec!["oom".into()]),
+                    go("remove", vec!["undo".into()])
+                ]
+                .spacing(8)
+                .into()
             ),
             item(
                 "Memory settings",
                 "swappiness, cache pressure and page-cluster tuned for zram",
                 row![
-                    text_input("100", &self.swappiness).on_input(Msg::Swappiness).width(80).padding(8).size(SMALL_SIZE),
+                    text_input("100", &self.swappiness)
+                        .on_input(Msg::Swappiness)
+                        .width(80)
+                        .padding(8)
+                        .size(SMALL_SIZE),
                     if ok_swappiness {
-                        go("apply", vec!["--swappiness".into(), self.swappiness.clone(), "sysctl".into()])
+                        go(
+                            "apply",
+                            vec![
+                                "--swappiness".into(),
+                                self.swappiness.clone(),
+                                "sysctl".into(),
+                            ],
+                        )
                     } else {
                         text("0-200").size(SMALL_SIZE).color(DIM).into()
                     },
@@ -86,7 +119,11 @@ impl State {
                 "Swap file",
                 "resize /home/swapfile (checks the free space first)",
                 row![
-                    text_input("8G", &self.swap).on_input(Msg::SwapSize).width(80).padding(8).size(SMALL_SIZE),
+                    text_input("8G", &self.swap)
+                        .on_input(Msg::SwapSize)
+                        .width(80)
+                        .padding(8)
+                        .size(SMALL_SIZE),
                     if ok_swap {
                         go("resize", vec!["swapfile".into(), self.swap.clone()])
                     } else {
@@ -97,15 +134,28 @@ impl State {
                 .align_y(iced::Alignment::Center)
                 .into()
             ),
-            item("SSH", "log in from another computer (set a password first: passwd)", go("enable", vec!["ssh".into()])),
-            item("State", "what is configured now", go("refresh", vec!["status".into()])),
+            item(
+                "SSH",
+                "log in from another computer (set a password first: passwd)",
+                go("enable", vec!["ssh".into()])
+            ),
+            item(
+                "State",
+                "what is configured now",
+                go("refresh", vec!["status".into()])
+            ),
         ]
         .spacing(SPACING);
         if self.busy {
             col = col.push(text("working...").size(TEXT_SIZE).color(DIM));
         }
         col = col.push(text(self.output.clone()).size(SMALL_SIZE));
-        scrollable(col.padding(iced::Padding { right: 16.0, ..iced::Padding::ZERO })).height(Fill).into()
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
     }
 }
 

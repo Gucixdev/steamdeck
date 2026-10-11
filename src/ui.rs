@@ -138,19 +138,33 @@ pub fn nav_item<'a, M: Clone + 'a>(
 
 /// The top of a page: what this is, in one plain sentence.
 pub fn page_title<'a, M: 'a>(title: &str, about: &str) -> Element<'a, M> {
-    column![text(title.to_string()).size(TITLE_SIZE).color(ACCENT), text(about.to_string()).size(SMALL_SIZE).color(DIM)]
-        .spacing(4)
-        .into()
+    column![
+        text(title.to_string()).size(TITLE_SIZE).color(ACCENT),
+        text(about.to_string()).size(SMALL_SIZE).color(DIM)
+    ]
+    .spacing(4)
+    .into()
 }
 
 /// A big tile for the home page: a title, a sentence, and one action.
-pub fn card<'a, M: Clone + 'a>(title: &str, about: &str, action: &'static str, msg: M) -> Element<'a, M> {
+pub fn card<'a, M: Clone + 'a>(
+    title: &str,
+    about: &str,
+    action: &'static str,
+    msg: M,
+) -> Element<'a, M> {
     container(
         row![
-            column![text(title.to_string()).size(TEXT_SIZE), text(about.to_string()).size(SMALL_SIZE).color(DIM)]
-                .spacing(4)
-                .width(Fill),
-            btn(text(action).size(TEXT_SIZE)).padding([10, 20]).on_press(msg).style(primary_button()),
+            column![
+                text(title.to_string()).size(TEXT_SIZE),
+                text(about.to_string()).size(SMALL_SIZE).color(DIM)
+            ]
+            .spacing(4)
+            .width(Fill),
+            btn(text(action).size(TEXT_SIZE))
+                .padding([10, 20])
+                .on_press(msg)
+                .style(primary_button()),
         ]
         .spacing(SPACING)
         .align_y(iced::Alignment::Center),
@@ -159,11 +173,92 @@ pub fn card<'a, M: Clone + 'a>(title: &str, about: &str, action: &'static str, m
     .width(Fill)
     .style(|_| container::Style {
         background: Some(iced::Background::Color(color!(0x2a475e))),
-        border: iced::Border { radius: 4.0.into(), ..Default::default() },
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
         ..Default::default()
     })
     .into()
 }
+
+/// Header of a table: dim column names; `w` is the relative width of each column.
+pub fn table_header<'a, M: 'a>(cols: &[(&str, u16)]) -> Element<'a, M> {
+    let mut r = row![].spacing(SPACING).padding([0, 12]);
+    for (name, w) in cols {
+        r = r.push(
+            text(name.to_string())
+                .size(SMALL_SIZE)
+                .color(DIM)
+                .width(Length::FillPortion(*w)),
+        );
+    }
+    r.into()
+}
+
+/// One table row: cells with relative widths, alternating background so rows read as rows.
+pub fn table_row<'a, M: 'a>(cells: Vec<(Element<'a, M>, u16)>, shaded: bool) -> Element<'a, M> {
+    let mut r = row![].spacing(SPACING).align_y(iced::Alignment::Center);
+    for (c, w) in cells {
+        r = r.push(container(c).width(Length::FillPortion(w)));
+    }
+    let bg = if shaded {
+        color!(0x203245)
+    } else {
+        color!(0x1b2838)
+    };
+    container(r)
+        .padding([8, 12])
+        .width(Fill)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(bg)),
+            border: iced::Border {
+                radius: 3.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// A warning tile (yellow) for something the user should not miss.
+pub fn warning_card<'a, M: Clone + 'a>(
+    title: &str,
+    about: &str,
+    action: &'static str,
+    msg: M,
+) -> Element<'a, M> {
+    container(
+        row![
+            column![
+                text(title.to_string()).size(TEXT_SIZE).color(AMBER),
+                text(about.to_string()).size(SMALL_SIZE)
+            ]
+            .spacing(4)
+            .width(Fill),
+            btn(text(action).size(TEXT_SIZE))
+                .padding([10, 20])
+                .on_press(msg)
+                .style(solid(AMBER_DARK)),
+        ]
+        .spacing(SPACING)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(PAD)
+    .width(Fill)
+    .style(|_| container::Style {
+        background: Some(iced::Background::Color(color!(0x4a3c0f))),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 2.0,
+            color: AMBER,
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+const AMBER_DARK: iced::Color = color!(0xb8860b);
 
 /// A section title in the main area.
 pub fn heading<'a, M: 'a>(s: impl Into<String>) -> Element<'a, M> {

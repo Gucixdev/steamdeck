@@ -28,7 +28,10 @@ pub fn write(who: &str, msg: &str) {
         let _ = fs::create_dir_all(d);
     }
     // keep the file from growing for ever: past 1 MB the old one becomes .1
-    if fs::metadata(&p).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+    if fs::metadata(&p)
+        .map(|m| m.len() > 1_000_000)
+        .unwrap_or(false)
+    {
         let _ = fs::rename(&p, p.with_extension("log.1"));
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&p) {

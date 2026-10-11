@@ -4,8 +4,8 @@ use crate::flatpak::{self, App as FpApp, GLOBAL};
 use crate::perms::{self, Layers, Tri, SECTIONS};
 use crate::portals::{self, Answer, Grant, PORTALS};
 use crate::ui::{
-    accent_button, danger_button, nav_item, quiet_button, segment, AMBER, DIM, GREEN,
-    ACCENT, RED, SMALL_SIZE, SPACING, TEXT_SIZE,
+    accent_button, danger_button, nav_item, quiet_button, segment, ACCENT, AMBER, DIM, GREEN, RED,
+    SMALL_SIZE, SPACING, TEXT_SIZE,
 };
 use iced::widget::{button, column, pick_list, row, scrollable, space, text, text_input, Column};
 use iced::{Element, Fill, Length, Task};
@@ -165,7 +165,14 @@ impl App {
                                 failed.push(format!("{id}: {e}"));
                             }
                         }
-                        (GLOBAL.to_string(), if failed.is_empty() { Ok(Vec::new()) } else { Err(failed.join("; ")) })
+                        (
+                            GLOBAL.to_string(),
+                            if failed.is_empty() {
+                                Ok(Vec::new())
+                            } else {
+                                Err(failed.join("; "))
+                            },
+                        )
                     },
                     |(a, r)| Msg::Grants(a, r),
                 );
@@ -262,7 +269,11 @@ impl App {
         let q = self.search.to_lowercase();
         let mut items: Vec<Element<Msg>> = Vec::new();
         let mut entry = |id: String, label: String| {
-            items.push(nav_item(label, active && id == self.selected, Msg::Select(id)));
+            items.push(nav_item(
+                label,
+                active && id == self.selected,
+                Msg::Select(id),
+            ));
         };
         entry(GLOBAL.to_string(), "All apps (global)".to_string());
         for a in &self.apps {
@@ -386,7 +397,15 @@ impl App {
         }
 
         {
-            right = right.push(text(if self.selected == GLOBAL { "Portals (applied to every installed app)" } else { "Portals" }).size(TEXT_SIZE).color(ACCENT));
+            right = right.push(
+                text(if self.selected == GLOBAL {
+                    "Portals (applied to every installed app)"
+                } else {
+                    "Portals"
+                })
+                .size(TEXT_SIZE)
+                .color(ACCENT),
+            );
             for (i, p) in PORTALS.iter().enumerate() {
                 let a = portals::answer(&self.grants, p);
                 let pick = |label: &'static str, v: Answer| {

@@ -310,10 +310,16 @@ pub fn internal_name(tool_dir: &Path) -> Option<String> {
 /// False for Steam's own Linux runtimes (from_oslist "linux", e.g. LegacyRuntime): they are not a
 /// Proton and are not offered as one. A tool that does not say is taken to be a Proton.
 pub fn runs_windows_games(tool_dir: &Path) -> bool {
-    let Ok(t) = fs::read_to_string(tool_dir.join("compatibilitytool.vdf")) else { return true };
+    let Ok(t) = fs::read_to_string(tool_dir.join("compatibilitytool.vdf")) else {
+        return true;
+    };
     let Ok(items) = parse(&t) else { return true };
-    let Some(V::Obj(ct)) = child(&items, "compatibilitytools") else { return true };
-    let Some(V::Obj(tools)) = child(ct, "compat_tools") else { return true };
+    let Some(V::Obj(ct)) = child(&items, "compatibilitytools") else {
+        return true;
+    };
+    let Some(V::Obj(tools)) = child(ct, "compat_tools") else {
+        return true;
+    };
     match tools.first() {
         Some((_, V::Obj(o))) => text(o, "from_oslist").map(|v| v != "linux").unwrap_or(true),
         _ => true,

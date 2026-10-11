@@ -32,7 +32,10 @@ pub const SECTIONS: &[Section] = &[
             ("x11", "X11 windowing"),
             ("fallback-x11", "X11 only when Wayland is missing"),
             ("wayland", "Wayland windowing"),
-            ("pulseaudio", "Sound: the PulseAudio socket, which PipeWire serves too (key: pulseaudio)"),
+            (
+                "pulseaudio",
+                "Sound: the PulseAudio socket, which PipeWire serves too (key: pulseaudio)",
+            ),
             ("session-bus", "Session message bus, unfiltered"),
             ("system-bus", "System message bus, unfiltered"),
             ("ssh-auth", "Remote login (SSH agent)"),
