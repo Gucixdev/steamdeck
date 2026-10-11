@@ -105,6 +105,24 @@ pub enum Event {
     Finished(String, Result<install::Outcome, String>),
 }
 
+/// Valve's own Protons by the name Steam knows them by. Steam downloads one of these by itself the
+/// first time a game is set to use it, so they can be offered without knowing their app ids.
+const VALVE_TOOLS: [(&str, &str); 11] = [
+    ("proton_experimental", "Proton Experimental"),
+    ("proton_hotfix", "Proton Hotfix"),
+    ("proton_10", "Proton 10.0"),
+    ("proton_9", "Proton 9.0"),
+    ("proton_8", "Proton 8.0"),
+    ("proton_7", "Proton 7.0"),
+    ("proton_63", "Proton 6.3"),
+    ("proton_513", "Proton 5.13"),
+    ("proton_5", "Proton 5.0"),
+    ("proton_411", "Proton 4.11"),
+    ("proton_316", "Proton 3.16"),
+];
+
+const VALVE_CATEGORY: &str = "Valve Proton (via Steam)";
+
 /// Downloads running at once, like `dspq -j 3`.
 const JOBS: usize = 3;
 
@@ -141,6 +159,8 @@ pub struct App {
     game_filter: String,
     protondb: HashMap<u64, String>,
     db_busy: bool,
+    /// the category dropdown shows Valve's own Protons instead of a GitHub project
+    valve_view: bool,
     /// appid -> Steam lists a Linux build
     native: HashMap<u64, bool>,
     launch_edit: HashMap<(PathBuf, u64), String>,
@@ -184,6 +204,7 @@ impl App {
             game_filter: String::new(),
             protondb: crate::protondb::cached(),
             db_busy: false,
+            valve_view: false,
             native: crate::protondb::native_cached(),
             launch_edit: HashMap::new(),
         };
@@ -286,7 +307,12 @@ impl App {
                 _ => {}
             },
             Msg::GameFilter(q) => self.game_filter = q,
+            Msg::SourceName(n) if n == VALVE_CATEGORY => {
+                self.valve_view = true;
+                self.tab = Tab::Available;
+            }
             Msg::SourceName(n) => {
+                self.valve_view = false;
                 if let Some(s) = SOURCES.iter().find(|s| s.name == n) {
                     return self.update(Msg::Source(s.id));
                 }
@@ -585,10 +611,16 @@ impl App {
         };
         let mut top = column![status].spacing(SPACING);
         if self.tab == Tab::Available {
-            let names: Vec<&'static str> = SOURCES.iter().map(|s| s.name).collect();
+            let mut names: Vec<&'static str> = SOURCES.iter().map(|s| s.name).collect();
+            names.push(VALVE_CATEGORY);
+            let selected = if self.valve_view {
+                VALVE_CATEGORY
+            } else {
+                self.source.name
+            };
             let mut r = row![
                 text("Category").size(SMALL_SIZE).color(DIM),
-                pick_list(names, Some(self.source.name), Msg::SourceName)
+                pick_list(names, Some(selected), Msg::SourceName)
                     .text_size(SMALL_SIZE)
                     .padding(10),
             ]
@@ -681,6 +713,11 @@ impl App {
                 let cur = r.mapping.get(&appid).cloned();
                 let mut options: Vec<String> = vec![DEFAULT.to_string()];
                 options.extend(r.installed.iter().map(|i| i.tool.clone()));
+                for (t, _) in VALVE_TOOLS {
+                    if !r.valve.iter().any(|v| v == t) {
+                        options.push(t.to_string());
+                    }
+                }
                 options.extend(
                     r.valve
                         .iter()
@@ -922,7 +959,79 @@ impl App {
         .into()
     }
 
+    /// Valve's own Protons: which are installed in each Steam, and one click to use one for all games.
+    fn valve_view(&self) -> Element<'_, Msg> {
+        let mut col = Column::new().spacing(4);
+        col = col.push(
+            text("Valve's Protons are part of Steam. Steam downloads one by itself the first time a game is set to use it; this list sets it for you.")
+                .size(SMALL_SIZE)
+                .color(DIM),
+        );
+        col = col.push(table_header(&[
+            ("Version", 3),
+            ("Steam", 2),
+            ("State", 3),
+            ("", 3),
+        ]));
+        let mut n = 0usize;
+        for r in &self.all {
+            for (tool, label) in VALVE_TOOLS {
+                let installed = r.valve.iter().any(|v| v == tool);
+                let using_default = r.mapping.get(&0).map(String::as_str) == Some(tool);
+                let state: Element<Msg> = if using_default {
+                    text("default for all games")
+                        .size(SMALL_SIZE)
+                        .color(ACCENT)
+                        .into()
+                } else if installed {
+                    text("installed").size(SMALL_SIZE).color(GREEN).into()
+                } else {
+                    text("downloaded by Steam on first use")
+                        .size(SMALL_SIZE)
+                        .color(DIM)
+                        .into()
+                };
+                let action: Element<Msg> = if using_default {
+                    text("").into()
+                } else {
+                    button(text("Use for all games").size(SMALL_SIZE))
+                        .padding([6, 12])
+                        .on_press(Msg::SetTool(r.root.clone(), 0, tool.to_string()))
+                        .style(primary_button())
+                        .into()
+                };
+                let short = r
+                    .label
+                    .trim_start_matches("Steam ")
+                    .trim_matches(|c| c == '(' || c == ')')
+                    .to_string();
+                col = col.push(table_row(
+                    vec![
+                        (text(label).size(TEXT_SIZE).into(), 3),
+                        (text(short).size(SMALL_SIZE).color(DIM).into(), 2),
+                        (state, 3),
+                        (action, 3),
+                    ],
+                    n % 2 == 1,
+                ));
+                n += 1;
+            }
+        }
+        if self.all.is_empty() {
+            col = col.push(text("Looking for Steam...").size(TEXT_SIZE).color(DIM));
+        }
+        scrollable(col.padding(iced::Padding {
+            right: 16.0,
+            ..iced::Padding::ZERO
+        }))
+        .height(Fill)
+        .into()
+    }
+
     fn available_view(&self) -> Element<'_, Msg> {
+        if self.valve_view {
+            return self.valve_view();
+        }
         let src = self.source;
         let about = text(src.about).size(SMALL_SIZE).color(DIM).width(Fill);
         let Some(l) = self.lists.get(src.id) else {
@@ -1093,36 +1202,168 @@ impl App {
     }
 }
 
-/// Runs the blocking install on its own thread and turns its progress callbacks into a stream.
+/// Runs the blocking install on its own thread and turns its progress into a stream.
+///
+/// The thread reports through an unbounded channel and this side forwards each report with `.await`,
+/// so the stream is polled the whole time. (An earlier version waited in a plain loop with no
+/// `.await`: nothing drained the bounded channel, the install thread blocked on it after 64 reports
+/// and the whole update hung on any download bigger than a few tens of megabytes.)
 fn install_stream(
     src: &'static Source,
     rel: Release,
     dir: PathBuf,
 ) -> impl iced::futures::Stream<Item = Event> {
+    use iced::futures::{SinkExt, StreamExt};
     iced::stream::channel(
         64,
-        async move |tx: iced::futures::channel::mpsc::Sender<Event>| {
-            let mut tx_progress = tx.clone();
-            let mut tx_done = tx;
+        async move |mut tx: iced::futures::channel::mpsc::Sender<Event>| {
             let tag = rel.tag_name.clone();
-            let tag_progress = tag.clone();
+            let (ptx, mut prx) = iced::futures::channel::mpsc::unbounded::<Progress>();
             let handle = std::thread::spawn(move || {
                 install::install(src, &rel, &dir, &mut |p| {
-                    let _ = iced::futures::executor::block_on(iced::futures::SinkExt::send(
-                        &mut tx_progress,
-                        Event::Progress(tag_progress.clone(), p),
-                    ));
+                    let _ = ptx.unbounded_send(p);
                 })
             });
-            let res = loop {
-                if handle.is_finished() {
-                    break handle
-                        .join()
-                        .unwrap_or_else(|_| Err("install thread crashed".into()));
+            // ends when the thread is done and drops its sender
+            while let Some(p) = prx.next().await {
+                if tx.send(Event::Progress(tag.clone(), p)).await.is_err() {
+                    break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            };
-            let _ = iced::futures::SinkExt::send(&mut tx_done, Event::Finished(tag, res)).await;
+            }
+            let res = handle
+                .join()
+                .unwrap_or_else(|_| Err("install thread crashed".into()));
+            let _ = tx.send(Event::Finished(tag, res)).await;
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::Asset;
+    use iced::futures::StreamExt;
+    use std::io::{BufRead, BufReader, Write};
+
+    /// A big archive of incompressible data, so the download reports many times.
+    fn big_archive(tag: &str, mb: usize) -> Vec<u8> {
+        let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut b = tar::Builder::new(enc);
+        let mut add = |path: String, data: &[u8]| {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, path, data).unwrap();
+        };
+        add(
+            format!("{tag}/compatibilitytool.vdf"),
+            b"\"compatibilitytools\" {}",
+        );
+        let mut x: u64 = 0x2545F4914F6CDD1D;
+        let data: Vec<u8> = (0..mb * 1024 * 1024)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect();
+        add(format!("{tag}/files/blob"), &data);
+        b.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn a_big_install_streams_all_its_progress_and_finishes() {
+        let tag = "GE-Proton99-1";
+        let data = big_archive(tag, 48);
+        let sum: String = {
+            use sha2::{Digest, Sha512};
+            Sha512::digest(&data)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect()
+        };
+        let sums = format!("{sum}  {tag}.tar.gz\n");
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let files = std::sync::Arc::new(vec![
+            (format!("/{tag}.tar.gz"), data),
+            (format!("/{tag}.sha512sum"), sums.into_bytes()),
+        ]);
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let files = files.clone();
+                std::thread::spawn(move || {
+                    let mut s = s;
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut line = String::new();
+                    r.read_line(&mut line).unwrap();
+                    loop {
+                        let mut h = String::new();
+                        if r.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                            break;
+                        }
+                    }
+                    let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    match files.iter().find(|(p, _)| *p == path) {
+                        Some((_, d)) => {
+                            let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", d.len());
+                            let _ = s.write_all(d);
+                        }
+                        None => {
+                            let _ =
+                                write!(s, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                        }
+                    }
+                });
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}");
+        let rel = Release {
+            tag_name: tag.into(),
+            published_at: String::new(),
+            prerelease: false,
+            assets: vec![
+                Asset {
+                    name: format!("{tag}.tar.gz"),
+                    browser_download_url: format!("{base}/{tag}.tar.gz"),
+                    size: 0,
+                },
+                Asset {
+                    name: format!("{tag}.sha512sum"),
+                    browser_download_url: format!("{base}/{tag}.sha512sum"),
+                    size: 0,
+                },
+            ],
+        };
+        let dir = std::env::temp_dir().join(format!("gui-big-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = sources::find("ge").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let d2 = dir.clone();
+        std::thread::spawn(move || {
+            let stream = install_stream(src, rel, d2);
+            let events: Vec<Event> = iced::futures::executor::block_on(stream.collect());
+            let _ = tx.send(events);
+        });
+        let events = rx
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("the install stream hung (the progress channel deadlocked)");
+        let progress = events
+            .iter()
+            .filter(|e| matches!(e, Event::Progress(..)))
+            .count();
+        assert!(
+            progress > 64,
+            "{progress} progress reports: enough to fill a 64-slot channel"
+        );
+        assert!(
+            matches!(events.last(), Some(Event::Finished(_, Ok(_)))),
+            "{:?}",
+            events.last()
+        );
+        assert!(dir.join(tag).join("files/blob").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
