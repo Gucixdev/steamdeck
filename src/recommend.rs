@@ -22,6 +22,24 @@ pub fn suggest(
     installed: &[String],
     valve: &[String],
 ) -> Option<Suggestion> {
+    suggest_with(tier, false, current, installed, valve)
+}
+
+/// `native`: Steam lists a Linux build, so no Proton is needed; a forced Proton is what is worth undoing.
+pub fn suggest_with(
+    tier: Option<&str>,
+    native: bool,
+    current: Option<&str>,
+    installed: &[String],
+    valve: &[String],
+) -> Option<Suggestion> {
+    if native {
+        current?;
+        return Some(Suggestion {
+            tool: String::new(),
+            why: "it has a native Linux build: no Proton needed, and the forced one makes it run the Windows build".into(),
+        });
+    }
     let ge = installed
         .iter()
         .find(|n| n.to_lowercase().starts_with("ge-proton"))
@@ -79,6 +97,15 @@ mod tests {
             ],
             vec!["proton_experimental".into(), "proton_9".into()],
         )
+    }
+
+    #[test]
+    fn a_native_linux_game_needs_no_proton() {
+        let (ge, v) = tools();
+        assert_eq!(suggest_with(Some("borked"), true, None, &ge, &v), None);
+        let s = suggest_with(None, true, Some("GE-Proton10-20"), &ge, &v).unwrap();
+        assert_eq!(s.tool, "");
+        assert!(s.why.contains("native"));
     }
 
     #[test]

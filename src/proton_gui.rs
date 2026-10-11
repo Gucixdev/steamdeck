@@ -39,7 +39,7 @@ pub enum Msg {
     LaunchSet(Result<(), String>),
     /// ask protondb.com for the ratings of the listed games (on request only)
     CheckDb,
-    DbDone(HashMap<u64, String>),
+    DbDone(HashMap<u64, String>, HashMap<u64, bool>),
     /// Steam root, appid, tool name ("" = Steam default)
     SetTool(PathBuf, u64, String),
     ToolSet(Result<(), String>),
@@ -141,6 +141,8 @@ pub struct App {
     game_filter: String,
     protondb: HashMap<u64, String>,
     db_busy: bool,
+    /// appid -> Steam lists a Linux build
+    native: HashMap<u64, bool>,
     launch_edit: HashMap<(PathBuf, u64), String>,
 }
 
@@ -182,6 +184,7 @@ impl App {
             game_filter: String::new(),
             protondb: crate::protondb::cached(),
             db_busy: false,
+            native: crate::protondb::native_cached(),
             launch_edit: HashMap::new(),
         };
         let t = Task::batch([app.fetch_page(1), app.load_all()]);
@@ -342,13 +345,19 @@ impl App {
                     .flat_map(|r| r.games.iter().map(|g| g.appid))
                     .collect();
                 return Task::perform(
-                    async move { crate::protondb::fetch_missing(&ids) },
-                    Msg::DbDone,
+                    async move {
+                        (
+                            crate::protondb::fetch_missing(&ids),
+                            crate::protondb::fetch_native_missing(&ids),
+                        )
+                    },
+                    |(t, n)| Msg::DbDone(t, n),
                 );
             }
-            Msg::DbDone(m) => {
+            Msg::DbDone(m, n) => {
                 self.db_busy = false;
                 self.protondb = m;
+                self.native = n;
             }
             Msg::SetTool(root, appid, tool) => {
                 self.error = None;
@@ -623,7 +632,7 @@ impl App {
         let db_label = if self.db_busy {
             "Asking protondb.com..."
         } else {
-            "Check ProtonDB ratings"
+            "Check native / ProtonDB"
         };
         let db_btn = button(text(db_label).size(SMALL_SIZE))
             .padding([6, 12])
@@ -758,7 +767,13 @@ impl App {
                 let sug = if appid == 0 {
                     None
                 } else {
-                    crate::recommend::suggest(tier.as_deref(), cur_tool, &installed_names, &r.valve)
+                    crate::recommend::suggest_with(
+                        tier.as_deref(),
+                        self.native.get(&appid).copied().unwrap_or(false),
+                        cur_tool,
+                        &installed_names,
+                        &r.valve,
+                    )
                 };
                 let name_cell: Element<Msg> = match sug {
                     Some(sg) => {
@@ -787,26 +802,41 @@ impl App {
                     }
                     None => text(name.clone()).size(TEXT_SIZE).into(),
                 };
-                let tier_text: Element<Msg> = match tier.as_deref() {
-                    Some(t) => {
-                        let c = match t {
-                            "platinum" => ACCENT,
-                            "gold" => AMBER,
-                            "borked" => RED,
-                            _ => DIM,
-                        };
-                        text(t.to_string()).size(SMALL_SIZE).color(c).into()
-                    }
-                    None => text(if appid == 0 { "" } else { "-" })
+                let is_native = self.native.get(&appid).copied().unwrap_or(false);
+                let tier_text: Element<Msg> = if is_native {
+                    // a Linux build exists: it runs without Proton, so the Proton rating is beside the point
+                    column![
+                        text("native").size(SMALL_SIZE).color(GREEN),
+                        text(match tier.as_deref() {
+                            Some(t) => format!("Windows build: {t}"),
+                            None => String::new(),
+                        })
                         .size(SMALL_SIZE)
-                        .color(DIM)
-                        .into(),
+                        .color(DIM),
+                    ]
+                    .into()
+                } else {
+                    match tier.as_deref() {
+                        Some(t) => {
+                            let c = match t {
+                                "platinum" => ACCENT,
+                                "gold" => AMBER,
+                                "borked" => RED,
+                                _ => DIM,
+                            };
+                            text(t.to_string()).size(SMALL_SIZE).color(c).into()
+                        }
+                        None => text(if appid == 0 { "" } else { "-" })
+                            .size(SMALL_SIZE)
+                            .color(DIM)
+                            .into(),
+                    }
                 };
                 col = col.push(table_row(
                     vec![
                         (name_cell, 4),
                         (text(short.clone()).size(SMALL_SIZE).color(DIM).into(), 1),
-                        (tier_text, 1),
+                        (tier_text, 2),
                         (dropdown.into(), 3),
                         (launch_dd, 6),
                     ],
