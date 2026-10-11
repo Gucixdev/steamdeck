@@ -1,61 +1,54 @@
 # steamdeck
 
-Small tools for the Steam Deck that do not drag Qt, Python or GTK along. Two single-binary apps
-written in Rust, and three bash scripts that put them on the Deck and tune the system.
+One small program for the Steam Deck that does not drag Qt, Python or GTK along: **ProtonUp**, **Flatseal**
+and **System** setup in a single window, in Steam's colours. Rust and iced, one binary (about 15 MB), plus
+two bash files: `setup` (a wizard) and `run` (build, install, start).
 
-| | what | form |
-|---|---|---|
-| `protonup` | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more for Steam | one binary, window or command line |
-| `flatseal` | edit Flatpak permission overrides | one binary, window or command line |
-| [`install`](install) | put the two binaries and menu entries on the Deck | bash, no root |
-| [`setup`](setup) | a wizard: install the programs, OOM guard, swap file, sysctl, ssh | bash, asks sudo |
-| [`build`](build) | build the release binaries | bash |
+| | what |
+|---|---|
+| ProtonUp | install and remove Proton-GE, Proton-CachyOS, Luxtorpeda and more; pick the Proton per game; every Steam install (native and Flatpak) on one list |
+| Flatseal | Flatpak permissions as default / on / off, portal permissions (also for all apps at once), PipeWire, filesystems, buses, environment |
+| System | OOM guard, memory settings for zram, swap file size, ssh: the same actions as `setup`, run from the window |
+| Log | `~/.local/state/steamdeck/steamdeck.log`: what the window and `setup` did and every error and panic |
 
-Both apps are one executable each (about 7-8 MB): the window is [iced](https://iced.rs) drawn on the GPU
-with a software fallback, plain Wayland/X11, rustls for HTTPS, pure-Rust gzip and xz. Nothing is
-installed next to them.
+The window is [iced](https://iced.rs) drawn on the GPU with a software fallback, plain Wayland/X11, rustls
+for HTTPS, pure-Rust gzip and xz.
 
 ## Install
 
 On the Deck, in Desktop Mode, in a terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/scripts/install | bash
+git clone https://github.com/Gucixdev/steamdeck && cd steamdeck && ./setup
 ```
 
-That downloads the binaries of the latest release, verifies their SHA-256 against the release's
-`SHA256SUMS`, puts them in `~/.local/bin` and adds ProtonUp and Flatseal to the application menu.
-Nothing needs root. Options (`bash -s -- OPTION`): `--only protonup`, `--timer` (a weekly
-`protonup install latest`), `--prefix DIR`, `--version TAG`, `--uninstall`, `--dry-run`.
+or only the program, straight from the latest release (SHA-256 verified against `SHA256SUMS`):
 
-For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick ProtonUp or Flatseal.
-The windows are laid out for the Deck's screen and touch, and both use the same layout: a sidebar on the
-left, the working area on the right (`src/ui.rs`).
+```sh
+curl -fsSL https://raw.githubusercontent.com/Gucixdev/steamdeck/main/setup | bash
+```
+
+`setup` asks what you want and shows the list before it changes anything: the program (menu entry and the
+`protonup` / `flatseal` command names), a weekly Proton-GE update, the OOM guard, memory settings, swap
+size, ssh, and preparing Firefox (telemetry and sponsored content off, WebRTC leak guard, uBlock Origin;
+Mullvad VPN is a system app, not a Firefox add-on). Run `./setup` again to see the state or remove it.
+
+For Gaming Mode: Desktop Mode, Steam, Games, **Add a Non-Steam Game**, pick Steam Deck.
 
 ## Layout
 
 ```
-src/ui.rs                 theme, buttons and the sidebar + main layout both windows share
-src/protonup.rs           protonup command line     src/proton_gui.rs   its window
-src/github.rs install.rs sources.rs steam.rs games.rs    releases, install, sources, Steam dirs, per-game tools
-src/flatseal.rs           flatseal command line     src/seal_gui.rs     its window
-src/flatpak.rs keyfile.rs perms.rs portals.rs        overrides, keyfile format, permissions, portals
-setup                     the wizard (asks, confirms, applies)
-run                       rebuild when src changed, start one program
-scripts/build             distributable binaries, GitHub release
-scripts/install           the curl|bash installer
-scripts/system            the /etc changes: oom, sysctl, swapfile, ssh, undo (used by setup)
+setup                     the wizard: programs, system, Firefox (asks, confirms, applies)
+run                       build when src changed, install, start; --publish TAG makes the release
+src/main.rs               steamdeck [protonup|flatseal ...] command lines, no arguments = the window
+src/launcher.rs           the window: ProtonUp, Flatseal, System, Log
+src/ui.rs                 theme (Steam colours) and the layout every section uses: sidebar + main area
+src/proton_gui.rs  cli_protonup.rs  github.rs install.rs sources.rs steam.rs games.rs
+src/seal_gui.rs    cli_flatseal.rs  flatpak.rs keyfile.rs perms.rs portals.rs
+src/system.rs log.rs      System section (runs the embedded setup script), the log file
 ```
 
-One Cargo package, one `src`, two binaries (`protonup`, `flatseal`).
-
-Then, if you want the system tuning:
-
-```sh
-git clone https://github.com/Gucixdev/steamdeck && cd steamdeck
-passwd                 # once: the deck user has no password and sudo needs one
-./setup                # asks what you want, shows the list, then does it
-```
+One Cargo package, one `src`, one binary. `protonup` and `flatseal` are symlinks to it.
 
 ## protonup
 
@@ -126,8 +119,7 @@ and system bus policies and environment variables are covered.
 
 `./setup` is a wizard: it asks whether to install the programs (and the weekly Proton-GE update), the OOM
 guard, the memory settings (and the swappiness value), a new swap file size, and ssh; it shows the list
-and applies it only after you confirm. The actions below are what `scripts/system` does, and what you can
-run one by one: `scripts/system oom`, `scripts/system swapfile 16G`, `scripts/system undo`.
+and applies it only after you confirm. The actions below are what the System section and `setup --system` do: `setup --system oom`, `setup --system swapfile 16G`, `setup --system undo`.
 
 | action | what it writes (all under `/etc`, which survives SteamOS updates) |
 |---|---|
@@ -140,24 +132,18 @@ run one by one: `scripts/system oom`, `scripts/system swapfile 16G`, `scripts/sy
 Every file starts with a `managed by steamdeck/setup` line; a file without it is never overwritten or
 removed. `--root DIR` writes into a test tree and only prints the commands, `--dry-run` changes nothing.
 
-## Build
-
-```sh
-scripts/build                 # host toolchain, dist/protonup-x86_64-linux, dist/flatseal-x86_64-linux, dist/SHA256SUMS
-scripts/build --portable      # links against glibc 2.36 with zig (cargo-zigbuild): runs on any SteamOS
-scripts/build --publish v0.1.0   # also create the GitHub release with those files
-cargo test              # unit and end-to-end tests (a local HTTP server stands in for GitHub)
-bats tests/             # the install, system and setup scripts
-```
-
-Use `--portable` for releases: a plain build needs the glibc of the machine it was built on.
-
 ## Development
 
-`./run` builds both programs when something in `src/` changed (otherwise it starts at once), then asks
-which one to start; `./run flatseal` skips the question, `./run --release` uses the optimised build. It
-passes no arguments on, use `target/debug/protonup ...` for those. `scripts/build` makes the distributable
-binaries (`--portable` for the release).
+```sh
+./run                   # builds when src/ changed, installs into ~/.local/bin, opens the window
+./run protonup          # the same, opened on ProtonUp (flatseal, system, log)
+./run --release         # optimised build
+./run --publish v0.2.0  # portable build (glibc 2.36 via zig) and a GitHub release for ./setup to download
+cargo test              # unit and end-to-end tests (a local HTTP server stands in for GitHub)
+bats tests/             # setup: programs, system actions, firefox, the wizard
+```
+
+`run` passes no arguments on; for those use `steamdeck protonup ...` / `steamdeck flatseal ...`.
 
 ## Status
 
@@ -165,7 +151,7 @@ Tested on an x86_64 desktop: all unit tests, the whole install pipeline against 
 GitHub API and against the real one (a real xz-compressed Luxtorpeda release with its published
 checksum), the windows rendered and inspected, both scripts under bats. **Not yet run on an actual
 Steam Deck**: the systemd-oomd units and the swap file steps follow what SteamOS ships but have not
-been exercised on one. `scripts/system status` and `scripts/system undo` are safe to try first.
+been exercised on one. `setup --system status` and `setup --system undo` are safe to try first.
 
 Not done: the apps cannot be driven by the Deck's gamepad directly (they take touch and the trackpads;
 as a non-Steam game Steam Input maps the pads to the mouse), no DXVK/VKD3D downloads for Lutris/Heroic,

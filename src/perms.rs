@@ -81,6 +81,7 @@ pub const SECTIONS: &[Section] = &[
             ("xdg-config", "User configuration"),
             ("xdg-cache", "User cache"),
             ("xdg-data", "User data"),
+            ("xdg-run/pipewire-0", "PipeWire (sound and screen capture)"),
         ],
     },
 ];

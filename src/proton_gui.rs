@@ -5,10 +5,10 @@ use crate::github::Release;
 use crate::install::{self, Installed, Progress};
 use crate::sources::{self, Source, SOURCES};
 use crate::ui::{
-    accent_button, danger_button, human_bytes, quiet_button, theme, AMBER, DIM, GREEN, PAD, PURPLE,
+    accent_button, danger_button, human_bytes, quiet_button, AMBER, DIM, GREEN, PAD, ACCENT,
     RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
-use crate::ui::{item, nav_item, shell};
+use crate::ui::{heading, item, nav_item, shell};
 use crate::{github, steam};
 use iced::widget::{
     button, column, pick_list, progress_bar, row, scrollable, space, text, text_input, Column,
@@ -17,38 +17,25 @@ use iced::{Element, Fill, Length, Task};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
-pub fn run(dir: PathBuf, pinned: bool, tab: Option<String>) -> iced::Result {
-    iced::application(
-        move || App::new(dir.clone(), pinned, tab.as_deref()),
-        App::update,
-        App::view,
-    )
-    .title("ProtonUp")
-    .theme(|_: &App| theme())
-    .window_size((1100.0, 700.0))
-    .run()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Tab {
+pub enum Tab {
     Installed,
     Available,
     Games,
 }
 
 #[derive(Debug, Clone)]
-enum Msg {
+pub enum Msg {
     Tab(Tab),
     Source(&'static str),
     SourceName(&'static str),
     GameFilter(String),
-    /// the games of a Steam root and what is mapped for them
-    Games(PathBuf, Vec<Game>, HashMap<u64, String>),
-    /// appid, tool name ("" = Steam default)
-    SetTool(u64, String),
-    ToolSet(Result<HashMap<u64, String>, String>),
+    /// every Steam install found, with its tools, games and per-game choices
+    All(Vec<RootInfo>),
+    /// Steam root, appid, tool name ("" = Steam default)
+    SetTool(PathBuf, u64, String),
+    ToolSet(Result<(), String>),
     Refresh,
-    Installed(PathBuf, Vec<Installed>),
     LoadMore,
     Loaded(&'static str, usize, Result<(Vec<Release>, bool), String>),
     Install(String),
@@ -56,14 +43,47 @@ enum Msg {
     CancelAll,
     InstallAll,
     Event(Event),
-    AskRemove(String),
+    AskRemove(PathBuf, String),
     CancelRemove,
-    Remove(String),
+    Remove(PathBuf, String),
     UseDir(PathBuf),
 }
 
+/// One Steam install on this machine: where it is, what is installed in it, its games.
 #[derive(Debug, Clone)]
-enum Event {
+pub struct RootInfo {
+    label: String,
+    root: PathBuf,
+    tools: PathBuf,
+    installed: Vec<Installed>,
+    games: Vec<Game>,
+    mapping: HashMap<u64, String>,
+}
+
+fn root_label(root: &std::path::Path) -> String {
+    if root.to_string_lossy().contains("com.valvesoftware.Steam") {
+        "Steam (Flatpak)".to_string()
+    } else if root.to_string_lossy().contains("snap/steam") {
+        "Steam (Snap)".to_string()
+    } else {
+        "Steam (native)".to_string()
+    }
+}
+
+fn scan_root(tools: PathBuf) -> RootInfo {
+    let root = tools.parent().map(PathBuf::from).unwrap_or_default();
+    RootInfo {
+        label: root_label(&root),
+        installed: install::list_installed(&tools),
+        games: games::games(&root),
+        mapping: games::mapping(&root),
+        root,
+        tools,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Event {
     Progress(String, Progress),
     Finished(String, Result<install::Outcome, String>),
 }
@@ -86,7 +106,7 @@ struct Listing {
     loading: bool,
 }
 
-struct App {
+pub struct App {
     dir: PathBuf,
     dirs: Vec<PathBuf>,
     tab: Tab,
@@ -98,15 +118,19 @@ struct App {
     busy: Vec<Busy>,
     queue: VecDeque<(&'static Source, Release)>,
     queue_total: usize,
-    confirm_remove: Option<String>,
+    confirm_remove: Option<(PathBuf, String)>,
     confirm_all: bool,
-    games: Vec<Game>,
-    mapping: HashMap<u64, String>,
+    all: Vec<RootInfo>,
     game_filter: String,
 }
 
 impl App {
-    fn new(dir: PathBuf, pinned: bool, start: Option<&str>) -> (Self, Task<Msg>) {
+    /// The error currently shown, for the launcher's log.
+    pub fn last_error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub fn new(dir: PathBuf, pinned: bool, start: Option<&str>) -> (Self, Task<Msg>) {
         let home = dirs::home_dir().unwrap_or_default();
         let dirs = if pinned {
             vec![dir.clone()]
@@ -134,46 +158,24 @@ impl App {
             queue_total: 0,
             confirm_remove: None,
             confirm_all: false,
-            games: Vec::new(),
-            mapping: HashMap::new(),
+            all: Vec::new(),
             game_filter: String::new(),
         };
-        let t = Task::batch([app.fetch_page(1), app.load_games(), {
-            let d = app.dir.clone();
-            Task::perform(
-                async move { (d.clone(), install::list_installed(&d)) },
-                |(d, l)| Msg::Installed(d, l),
-            )
-        }]);
+        let t = Task::batch([app.fetch_page(1), app.load_all()]);
         (app, t)
     }
 
-    /// Names right away, sizes from a background thread: the size walk touches thousands of files.
+    /// Names right away for the target directory; every install is scanned (sizes too) in the background.
     fn reload(&mut self) -> Task<Msg> {
         self.installed = install::list_installed_with(&self.dir, false);
-        let dir = self.dir.clone();
-        Task::perform(
-            async move { (dir.clone(), install::list_installed(&dir)) },
-            |(d, l)| Msg::Installed(d, l),
-        )
+        self.load_all()
     }
 
-    /// The Steam root is the directory above compatibilitytools.d.
-    fn root(&self) -> Option<PathBuf> {
-        self.dir.parent().map(PathBuf::from)
-    }
-
-    fn load_games(&self) -> Task<Msg> {
-        let Some(root) = self.root() else {
-            return Task::none();
-        };
+    fn load_all(&self) -> Task<Msg> {
+        let dirs = self.dirs.clone();
         Task::perform(
-            async move {
-                let g = games::games(&root);
-                let m = games::mapping(&root);
-                (root, g, m)
-            },
-            |(r, g, m)| Msg::Games(r, g, m),
+            async move { dirs.into_iter().map(scan_root).collect::<Vec<_>>() },
+            Msg::All,
         )
     }
 
@@ -208,7 +210,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn update(&mut self, m: Msg) -> Task<Msg> {
+    pub fn update(&mut self, m: Msg) -> Task<Msg> {
         match m {
             Msg::Tab(t) => self.tab = t,
             Msg::GameFilter(q) => self.game_filter = q,
@@ -217,39 +219,30 @@ impl App {
                     return self.update(Msg::Source(s.id));
                 }
             }
-            Msg::Games(root, g, m) => {
-                if Some(&root) == self.root().as_ref() {
-                    self.games = g;
-                    self.mapping = m;
+            Msg::All(v) => {
+                if let Some(r) = v.iter().find(|r| r.tools == self.dir) {
+                    self.installed = r.installed.clone();
                 }
+                self.all = v;
             }
-            Msg::SetTool(appid, tool) => {
-                let Some(root) = self.root() else {
-                    return Task::none();
-                };
+            Msg::SetTool(root, appid, tool) => {
                 self.error = None;
                 self.notice = None;
                 return Task::perform(
                     async move {
-                        let t = if tool.is_empty() {
-                            None
-                        } else {
-                            Some(tool.as_str())
-                        };
-                        games::set_tool(&root, appid, t).map(|_| games::mapping(&root))
+                        let t = if tool.is_empty() { None } else { Some(tool.as_str()) };
+                        games::set_tool(&root, appid, t)
                     },
                     Msg::ToolSet,
                 );
             }
-            Msg::ToolSet(r) => {
-                match r {
-                    Ok(m) => {
-                        self.mapping = m;
-                        self.notice = Some("Saved. Start Steam again; the game uses this tool from its next launch.".into());
-                    }
-                    Err(e) => self.error = Some(e),
+            Msg::ToolSet(r) => match r {
+                Ok(()) => {
+                    self.notice = Some("Saved. Start Steam again; the game uses this tool from its next launch.".into());
+                    return self.load_all();
                 }
-            }
+                Err(e) => self.error = Some(e),
+            },
             Msg::Source(id) => {
                 if let Some(s) = sources::find(id) {
                     self.source = s;
@@ -290,18 +283,13 @@ impl App {
             }
             Msg::UseDir(d) => {
                 self.dir = d;
-                return Task::batch([self.reload(), self.load_games()]);
+                return self.reload();
             }
-            Msg::Installed(d, l) => {
-                if d == self.dir {
-                    self.installed = l;
-                }
-            }
-            Msg::AskRemove(n) => self.confirm_remove = Some(n),
+            Msg::AskRemove(d, n) => self.confirm_remove = Some((d, n)),
             Msg::CancelRemove => self.confirm_remove = None,
-            Msg::Remove(n) => {
+            Msg::Remove(d, n) => {
                 self.confirm_remove = None;
-                match install::remove(&self.dir, &n) {
+                match install::remove(&d, &n) {
                     Ok(()) => self.notice = Some(format!("Removed {n}. Restart Steam.")),
                     Err(e) => self.error = Some(e),
                 }
@@ -379,7 +367,7 @@ impl App {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Msg> {
+    pub fn view(&self) -> Element<'_, Msg> {
         let side = column![
             nav_item(
                 "Installed",
@@ -483,6 +471,7 @@ impl App {
         shell(side.into(), column![top, body].spacing(SPACING).into())
     }
 
+    /// Every Steam install on one list: what is where, with its games below it.
     fn games_view(&self) -> Element<'_, Msg> {
         let mut col = Column::new().spacing(10);
         if games::steam_running() {
@@ -492,13 +481,6 @@ impl App {
                     .color(AMBER),
             );
         }
-        if self.games.is_empty() {
-            col = col.push(
-                text("No installed games found in this Steam.")
-                    .size(TEXT_SIZE)
-                    .color(DIM),
-            );
-        }
         col = col.push(
             text_input("Filter games", &self.game_filter)
                 .on_input(Msg::GameFilter)
@@ -506,99 +488,100 @@ impl App {
                 .size(SMALL_SIZE),
         );
         const DEFAULT: &str = "Steam default";
-        let row_for = |appid: u64, name: &str| -> Element<'_, Msg> {
-            let cur = self.mapping.get(&appid).cloned();
-            let mut options: Vec<String> = vec![DEFAULT.to_string()];
-            options.extend(self.installed.iter().map(|i| i.tool.clone()));
-            if let Some(c) = &cur {
-                if !options.contains(c) {
-                    options.push(c.clone());
-                }
-            }
-            let selected = cur.unwrap_or_else(|| DEFAULT.to_string());
-            item(
-                name.to_string(),
-                if appid == 0 {
-                    "used by every game that has no choice of its own".to_string()
-                } else {
-                    format!("app {appid}")
-                },
-                pick_list(options, Some(selected), move |t| {
-                    Msg::SetTool(appid, if t == DEFAULT { String::new() } else { t })
-                })
-                .text_size(SMALL_SIZE)
-                .padding(10)
-                .into(),
-            )
-        };
         let q = self.game_filter.to_lowercase();
-        if q.is_empty() {
-            col = col.push(row_for(0, "All games"));
+        for r in &self.all {
+            col = col.push(heading(format!("{}  {}", r.label, r.root.display())));
+            let row_for = |appid: u64, name: &str| -> Element<'_, Msg> {
+                let cur = r.mapping.get(&appid).cloned();
+                let mut options: Vec<String> = vec![DEFAULT.to_string()];
+                options.extend(r.installed.iter().map(|i| i.tool.clone()));
+                if let Some(c) = &cur {
+                    if !options.contains(c) {
+                        options.push(c.clone());
+                    }
+                }
+                let selected = cur.unwrap_or_else(|| DEFAULT.to_string());
+                let root = r.root.clone();
+                item(
+                    name.to_string(),
+                    if appid == 0 { "every game without a choice of its own".to_string() } else { format!("app {appid}") },
+                    pick_list(options, Some(selected), move |t| {
+                        Msg::SetTool(root.clone(), appid, if t == DEFAULT { String::new() } else { t })
+                    })
+                    .text_size(SMALL_SIZE)
+                    .padding(10)
+                    .into(),
+                )
+            };
+            if q.is_empty() {
+                col = col.push(row_for(0, "All games"));
+            }
+            if r.games.is_empty() {
+                col = col.push(text("no installed games found here").size(SMALL_SIZE).color(DIM));
+            }
+            for g in r.games.iter().filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q)) {
+                col = col.push(row_for(g.appid, &g.name));
+            }
         }
-        for g in self
-            .games
-            .iter()
-            .filter(|g| q.is_empty() || g.name.to_lowercase().contains(&q))
-        {
-            col = col.push(row_for(g.appid, &g.name));
+        if self.all.is_empty() {
+            col = col.push(text("Looking for Steam...").size(TEXT_SIZE).color(DIM));
         }
-        scrollable(col.padding(iced::Padding {
-            right: 16.0,
-            ..iced::Padding::ZERO
-        }))
-        .height(Fill)
-        .into()
+        scrollable(col.padding(iced::Padding { right: 16.0, ..iced::Padding::ZERO }))
+            .height(Fill)
+            .into()
     }
 
+    /// What is installed, in every Steam install, on one list.
     fn installed_view(&self) -> Element<'_, Msg> {
-        if self.installed.is_empty() {
-            return text("Nothing installed yet. Open Available and install a tool.")
-                .size(TEXT_SIZE)
-                .color(DIM)
-                .into();
-        }
         let mut col = Column::new().spacing(8);
-        for i in &self.installed {
-            let confirm = self.confirm_remove.as_deref() == Some(i.name.as_str());
-            let actions: Element<Msg> = if confirm {
-                row![
-                    text("Remove?").size(TEXT_SIZE).color(AMBER),
-                    button(text("Yes, remove").size(TEXT_SIZE))
-                        .padding(PAD)
-                        .on_press(Msg::Remove(i.name.clone()))
-                        .style(danger_button()),
-                    button(text("Cancel").size(TEXT_SIZE))
-                        .padding(PAD)
-                        .on_press(Msg::CancelRemove)
-                        .style(quiet_button()),
-                ]
-                .spacing(SPACING)
-                .align_y(iced::Alignment::Center)
-                .into()
-            } else {
-                button(text("Remove").size(TEXT_SIZE))
-                    .padding(PAD)
-                    .on_press(Msg::AskRemove(i.name.clone()))
-                    .style(quiet_button())
+        let mut any = false;
+        for r in &self.all {
+            col = col.push(heading(format!("{}  {}", r.label, r.tools.display())));
+            if r.installed.is_empty() {
+                col = col.push(text("nothing installed").size(SMALL_SIZE).color(DIM));
+            }
+            for i in &r.installed {
+                any = true;
+                let confirm = self.confirm_remove.as_ref() == Some(&(r.tools.clone(), i.name.clone()));
+                let actions: Element<Msg> = if confirm {
+                    row![
+                        text("Remove?").size(TEXT_SIZE).color(AMBER),
+                        button(text("Yes, remove").size(TEXT_SIZE))
+                            .padding(PAD)
+                            .on_press(Msg::Remove(r.tools.clone(), i.name.clone()))
+                            .style(danger_button()),
+                        button(text("Cancel").size(TEXT_SIZE)).padding(PAD).on_press(Msg::CancelRemove).style(quiet_button()),
+                    ]
+                    .spacing(SPACING)
+                    .align_y(iced::Alignment::Center)
                     .into()
-            };
-            col = col.push(
-                row![
-                    text(i.name.clone()).size(TEXT_SIZE),
-                    space::horizontal(),
-                    text(human_bytes(i.size)).size(SMALL_SIZE).color(DIM),
-                    actions,
-                ]
-                .spacing(SPACING)
-                .align_y(iced::Alignment::Center),
-            );
+                } else {
+                    button(text("Remove").size(TEXT_SIZE))
+                        .padding(PAD)
+                        .on_press(Msg::AskRemove(r.tools.clone(), i.name.clone()))
+                        .style(quiet_button())
+                        .into()
+                };
+                col = col.push(
+                    row![
+                        text(i.name.clone()).size(TEXT_SIZE),
+                        space::horizontal(),
+                        text(human_bytes(i.size)).size(SMALL_SIZE).color(DIM),
+                        actions,
+                    ]
+                    .spacing(SPACING)
+                    .align_y(iced::Alignment::Center),
+                );
+            }
         }
-        scrollable(col.padding(iced::Padding {
-            right: 16.0,
-            ..iced::Padding::ZERO
-        }))
-        .height(Fill)
-        .into()
+        if self.all.is_empty() {
+            col = col.push(text("Looking for Steam...").size(TEXT_SIZE).color(DIM));
+        } else if !any {
+            col = col.push(text("Nothing installed yet. Open Available and install a tool.").size(TEXT_SIZE).color(DIM));
+        }
+        scrollable(col.padding(iced::Padding { right: 16.0, ..iced::Padding::ZERO }))
+            .height(Fill)
+            .into()
     }
 
     fn available_view(&self) -> Element<'_, Msg> {
@@ -687,7 +670,7 @@ impl App {
             let queued = self.queue.iter().any(|(_, q)| q.tag_name == r.tag_name)
                 || self.busy.iter().any(|b| b.tag == r.tag_name);
             let action: Element<Msg> = if has {
-                text("installed").size(SMALL_SIZE).color(PURPLE).into()
+                text("installed").size(SMALL_SIZE).color(ACCENT).into()
             } else if queued {
                 text("queued").size(SMALL_SIZE).color(AMBER).into()
             } else {

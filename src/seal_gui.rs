@@ -4,22 +4,14 @@ use crate::flatpak::{self, App as FpApp, GLOBAL};
 use crate::perms::{self, Layers, Tri, SECTIONS};
 use crate::portals::{self, Answer, Grant, PORTALS};
 use crate::ui::{
-    accent_button, danger_button, nav_item, quiet_button, segment, shell, theme, AMBER, DIM, GREEN,
-    PURPLE, RED, SMALL_SIZE, SPACING, TEXT_SIZE,
+    accent_button, danger_button, nav_item, quiet_button, segment, shell, AMBER, DIM, GREEN,
+    ACCENT, RED, SMALL_SIZE, SPACING, TEXT_SIZE,
 };
 use iced::widget::{button, column, pick_list, row, scrollable, space, text, text_input, Column};
 use iced::{Element, Fill, Length, Task};
 
-pub fn run(select: Option<String>) -> iced::Result {
-    iced::application(move || App::new(select.clone()), App::update, App::view)
-        .title("Flatseal")
-        .theme(|_: &App| theme())
-        .window_size((1100.0, 700.0))
-        .run()
-}
-
 #[derive(Debug, Clone)]
-enum Msg {
+pub enum Msg {
     Apps(Result<Vec<FpApp>, String>),
     Select(String),
     /// the permission-store entries of an app (app id, entries or the error)
@@ -47,7 +39,7 @@ enum Msg {
 
 const POLICIES: [&str; 4] = ["none", "see", "talk", "own"];
 
-struct App {
+pub struct App {
     apps: Vec<FpApp>,
     error: Option<String>,
     search: String,
@@ -65,7 +57,12 @@ struct App {
 }
 
 impl App {
-    fn new(select: Option<String>) -> (Self, Task<Msg>) {
+    /// The error currently shown, for the launcher's log.
+    pub fn last_error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub fn new(select: Option<String>) -> (Self, Task<Msg>) {
         // `flatpak list` is slow: the window opens first, the app list arrives when it is done
         let (apps, error) = (vec![], None);
         let load = Task::perform(async { flatpak::list_apps() }, Msg::Apps);
@@ -122,7 +119,7 @@ impl App {
         )
     }
 
-    fn update(&mut self, m: Msg) -> Task<Msg> {
+    pub fn update(&mut self, m: Msg) -> Task<Msg> {
         self.saved = false;
         match m {
             Msg::Apps(r) => {
@@ -146,6 +143,22 @@ impl App {
                         Err(e) => self.error = Some(e),
                     }
                 }
+            }
+            Msg::Portal(i, a) if self.selected == GLOBAL => {
+                // there is no global portal setting: apply it to every installed app
+                let ids: Vec<String> = self.apps.iter().map(|a| a.id.clone()).collect();
+                return Task::perform(
+                    async move {
+                        let mut failed = Vec::new();
+                        for id in &ids {
+                            if let Err(e) = portals::set(id, &PORTALS[i], a) {
+                                failed.push(format!("{id}: {e}"));
+                            }
+                        }
+                        (GLOBAL.to_string(), if failed.is_empty() { Ok(Vec::new()) } else { Err(failed.join("; ")) })
+                    },
+                    |(a, r)| Msg::Grants(a, r),
+                );
             }
             Msg::Portal(i, a) => {
                 let app = self.selected.clone();
@@ -233,7 +246,7 @@ impl App {
         Task::none()
     }
 
-    fn view(&self) -> Element<'_, Msg> {
+    pub fn view(&self) -> Element<'_, Msg> {
         // left: the app list
         let q = self.search.to_lowercase();
         let mut items: Vec<Element<Msg>> = Vec::new();
@@ -296,7 +309,7 @@ impl App {
         }
 
         for s in SECTIONS {
-            right = right.push(text(s.title).size(TEXT_SIZE).color(PURPLE));
+            right = right.push(text(s.title).size(TEXT_SIZE).color(ACCENT));
             for (name, desc) in s.items {
                 let on = self.layers.is_on(s.key, name);
                 let own = self.layers.own_state(s.key, name);
@@ -358,8 +371,8 @@ impl App {
             }
         }
 
-        if self.selected != GLOBAL {
-            right = right.push(text("Portals").size(TEXT_SIZE).color(PURPLE));
+        {
+            right = right.push(text(if self.selected == GLOBAL { "Portals (applied to every installed app)" } else { "Portals" }).size(TEXT_SIZE).color(ACCENT));
             for (i, p) in PORTALS.iter().enumerate() {
                 let a = portals::answer(&self.grants, p);
                 let pick = |label: &'static str, v: Answer| {
@@ -419,7 +432,7 @@ impl App {
             ("Session bus", perms::SESSION_BUS),
             ("System bus", perms::SYSTEM_BUS),
         ] {
-            right = right.push(text(title).size(TEXT_SIZE).color(PURPLE));
+            right = right.push(text(title).size(TEXT_SIZE).color(ACCENT));
             for e in self.layers.bus(group) {
                 let mut r = row![text(e.name.clone()).size(SMALL_SIZE), space::horizontal()]
                     .spacing(8)
@@ -468,7 +481,7 @@ impl App {
             );
         }
 
-        right = right.push(text("Environment").size(TEXT_SIZE).color(PURPLE));
+        right = right.push(text("Environment").size(TEXT_SIZE).color(ACCENT));
         for e in self.layers.env() {
             let mut r = row![
                 text(e.name.clone())

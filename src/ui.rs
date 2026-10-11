@@ -9,19 +9,20 @@ pub const TITLE_SIZE: f32 = 28.0;
 pub const SPACING: f32 = 12.0;
 pub const PAD: f32 = 14.0;
 
-pub const GREEN: iced::Color = color!(0x00ff41);
-pub const PURPLE: iced::Color = color!(0x9944ff);
-pub const RED: iced::Color = color!(0xff3b3b);
-pub const AMBER: iced::Color = color!(0xffae00);
-pub const DIM: iced::Color = color!(0x8a8a99);
+pub const GREEN: iced::Color = color!(0x5ba32b);
+/// Steam blue (the focus colour of the Steam client and Gaming Mode)
+pub const ACCENT: iced::Color = color!(0x1a9fff);
+pub const RED: iced::Color = color!(0xd94126);
+pub const AMBER: iced::Color = color!(0xe5a823);
+pub const DIM: iced::Color = color!(0x8b929a);
 
 pub fn theme() -> Theme {
     Theme::custom(
         "Deck".to_string(),
         Palette {
-            background: color!(0x0b0b10),
-            text: color!(0xe6e6ee),
-            primary: PURPLE,
+            background: color!(0x171d25),
+            text: color!(0xdcdedf),
+            primary: ACCENT,
             success: GREEN,
             warning: AMBER,
             danger: RED,
@@ -85,13 +86,13 @@ pub fn solid(bg: iced::Color) -> impl Fn(&IcedTheme, button::Status) -> button::
 }
 
 pub fn accent_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0x7b3fe4))
+    solid(color!(0x1a73c8))
 }
 pub fn quiet_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0x2a2a38))
+    solid(color!(0x2a3441))
 }
 pub fn danger_button() -> impl Fn(&IcedTheme, button::Status) -> button::Style {
-    solid(color!(0xc0392b))
+    solid(color!(0xb03a2a))
 }
 
 use iced::widget::{button as btn, column, container, row, text};
@@ -133,7 +134,7 @@ pub fn nav_item<'a, M: Clone + 'a>(
 
 /// A section title in the main area.
 pub fn heading<'a, M: 'a>(s: impl Into<String>) -> Element<'a, M> {
-    text(s.into()).size(TEXT_SIZE).color(PURPLE).into()
+    text(s.into()).size(TEXT_SIZE).color(ACCENT).into()
 }
 
 /// One of a few choices shown side by side (default / on / off, default / yes / no).

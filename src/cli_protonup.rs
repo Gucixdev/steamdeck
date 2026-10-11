@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use steamdeck::{github, install, sources, steam};
+use crate::{github, install, sources, steam};
 
 macro_rules! say {
     ($($a:tt)*) => {{
@@ -64,8 +64,7 @@ fn fail(msg: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+pub fn run(mut args: Vec<String>) -> ExitCode {
     let dir = match take_opt(&mut args, "--dir") {
         Ok(d) => d.map(PathBuf::from),
         Err(e) => return fail(e),
@@ -112,7 +111,7 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        "gui" => match steamdeck::proton_gui::run(dir_path, dir.is_some(), args.get(1).cloned()) {
+        "gui" => match crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Proton, dir: dir.is_some().then(|| dir_path.clone()), tab: args.get(1).cloned(), app: None }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(e),
         },
@@ -120,7 +119,7 @@ fn main() -> ExitCode {
             let Some(root) = dir_path.parent() else {
                 return fail("no Steam root");
             };
-            let map = steamdeck::games::mapping(root);
+            let map = crate::games::mapping(root);
             let tool = |id: u64| {
                 map.get(&id)
                     .map(String::as_str)
@@ -128,7 +127,7 @@ fn main() -> ExitCode {
                     .to_string()
             };
             say!("{:>9}  {:<40} {}", 0, "all games", tool(0));
-            for g in steamdeck::games::games(root) {
+            for g in crate::games::games(root) {
                 say!("{:>9}  {:<40} {}", g.appid, g.name, tool(g.appid));
             }
             ExitCode::SUCCESS
@@ -156,7 +155,7 @@ fn main() -> ExitCode {
                     }
                 }
             };
-            match steamdeck::games::set_tool(root, appid, chosen.as_deref()) {
+            match crate::games::set_tool(root, appid, chosen.as_deref()) {
                 Ok(()) => {
                     say!("{appid}: {}", chosen.as_deref().unwrap_or("Steam default"));
                     ExitCode::SUCCESS
@@ -170,7 +169,7 @@ fn main() -> ExitCode {
                 say!("nothing installed in {}", dir_path.display());
             }
             for i in l {
-                say!("{:<44} {}", i.name, steamdeck::ui::human_bytes(i.size));
+                say!("{:<44} {}", i.name, crate::ui::human_bytes(i.size));
             }
             ExitCode::SUCCESS
         }
@@ -193,7 +192,7 @@ fn main() -> ExitCode {
                     for r in rs {
                         let size = r
                             .archive(src)
-                            .map(|a| steamdeck::ui::human_bytes(a.size))
+                            .map(|a| crate::ui::human_bytes(a.size))
                             .unwrap_or_default();
                         let mark = if have.contains(&r.dir_name(src)) {
                             "installed"
@@ -258,7 +257,7 @@ fn main() -> ExitCode {
                     "{} releases of {} not installed yet, {} to download (more once unpacked)",
                     todo.len(),
                     src.name,
-                    steamdeck::ui::human_bytes(total)
+                    crate::ui::human_bytes(total)
                 );
                 if !yes {
                     print!("continue? [y/N] ");
@@ -334,8 +333,8 @@ fn main() -> ExitCode {
                             "\r  queue: {}/{} done   {} / {}   -j{}  ",
                             finished.load(ord),
                             todo.len(),
-                            steamdeck::ui::human_bytes(have),
-                            steamdeck::ui::human_bytes(want),
+                            crate::ui::human_bytes(have),
+                            crate::ui::human_bytes(want),
                             jobs
                         );
                     }

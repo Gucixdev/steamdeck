@@ -2,8 +2,8 @@
 //! operations are available on the command line.
 
 use std::process::ExitCode;
-use steamdeck::flatpak::{self, GLOBAL};
-use steamdeck::perms::{self, SECTIONS};
+use crate::flatpak::{self, GLOBAL};
+use crate::perms::{self, SECTIONS};
 
 macro_rules! say {
     ($($a:tt)*) => {{
@@ -42,15 +42,14 @@ fn save(id: &str, l: &perms::Layers) -> Result<(), String> {
     flatpak::save_override(id, &l.app)
 }
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+pub fn run(args: Vec<String>) -> ExitCode {
     let a = |i: usize| args.get(i).map(String::as_str);
     match a(0).unwrap_or("gui") {
         "-h" | "--help" | "help" => {
             say!("{HELP}");
             ExitCode::SUCCESS
         }
-        "gui" => steamdeck::seal_gui::run(a(1).map(str::to_string))
+        "gui" => crate::launcher::run(crate::launcher::Start { section: crate::launcher::Section::Seal, dir: None, tab: None, app: a(1).map(str::to_string) })
             .map(|_| ExitCode::SUCCESS)
             .unwrap_or_else(fail),
         "list" => match flatpak::list_apps() {
@@ -119,12 +118,12 @@ fn main() -> ExitCode {
             let Some(id) = a(1) else {
                 return fail("portals needs an app id");
             };
-            let g = steamdeck::portals::grants(id);
-            for p in steamdeck::portals::PORTALS {
-                let v = match steamdeck::portals::answer(&g, p) {
-                    steamdeck::portals::Answer::Yes => "yes",
-                    steamdeck::portals::Answer::No => "no",
-                    steamdeck::portals::Answer::Default => "default",
+            let g = crate::portals::grants(id);
+            for p in crate::portals::PORTALS {
+                let v = match crate::portals::answer(&g, p) {
+                    crate::portals::Answer::Yes => "yes",
+                    crate::portals::Answer::No => "no",
+                    crate::portals::Answer::Default => "default",
                 };
                 say!("  {:<13} {:<8} {}", p.name, v, p.about);
             }
@@ -132,7 +131,7 @@ fn main() -> ExitCode {
                 say!(
                     "  file          {}  {}",
                     e.id,
-                    steamdeck::portals::document_path(&e.data).unwrap_or_default()
+                    crate::portals::document_path(&e.data).unwrap_or_default()
                 );
             }
             ExitCode::SUCCESS
@@ -141,16 +140,16 @@ fn main() -> ExitCode {
             let (Some(id), Some(name), Some(v)) = (a(1), a(2), a(3)) else {
                 return fail("portal needs APP NAME yes|no|default");
             };
-            let Some(p) = steamdeck::portals::PORTALS.iter().find(|p| p.name == name) else {
+            let Some(p) = crate::portals::PORTALS.iter().find(|p| p.name == name) else {
                 return fail(format!("unknown portal '{name}' (background, notification, camera, microphone, speakers)"));
             };
             let ans = match v {
-                "yes" => steamdeck::portals::Answer::Yes,
-                "no" => steamdeck::portals::Answer::No,
-                "default" => steamdeck::portals::Answer::Default,
+                "yes" => crate::portals::Answer::Yes,
+                "no" => crate::portals::Answer::No,
+                "default" => crate::portals::Answer::Default,
                 _ => return fail("the value is yes, no or default"),
             };
-            match steamdeck::portals::set(id, p, ans) {
+            match crate::portals::set(id, p, ans) {
                 Ok(()) => {
                     say!("{id}: {name} {v}");
                     ExitCode::SUCCESS
@@ -162,7 +161,7 @@ fn main() -> ExitCode {
             let (Some(id), Some(table), Some(obj)) = (a(1), a(2), a(3)) else {
                 return fail("revoke needs APP TABLE ID");
             };
-            match steamdeck::portals::revoke(id, table, obj) {
+            match crate::portals::revoke(id, table, obj) {
                 Ok(()) => {
                     say!("{id}: revoked {table} {obj}");
                     ExitCode::SUCCESS

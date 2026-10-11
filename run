@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# run - build both programs when the code changed, install them, start the one you pick.
+# run - build the program when the code changed, install it, start it.
 #
-#   ./run                  asks which one to start
-#   ./run protonup         starts protonup (no arguments are passed on)
-#   ./run flatseal         the same for flatseal
-#   ./run --release        optimised build instead of the quick debug one (combine with a name)
+#   ./run                  the window with everything (ProtonUp, Flatseal, System, Log)
+#   ./run protonup         the same window, opened on ProtonUp (flatseal, system, log likewise)
+#   ./run --release        optimised build instead of the quick debug one
 #   ./run --publish TAG    portable build (old glibc via zig) into dist/ and a GitHub release TAG
 #
 # The build is skipped when no file in src/ or the Cargo files is newer than the binaries, so a repeated
@@ -26,7 +25,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-PROGS=(protonup flatseal)
+PROGS=(steamdeck)
 
 if [ -n "$PUBLISH" ]; then
 	GLIBC=2.36 # SteamOS 3.5 ships 2.37; the binary then runs on every SteamOS, not just this machine
@@ -43,7 +42,7 @@ if [ -n "$PUBLISH" ]; then
 		printf '%-10s needs glibc %s\n' "$p" "${v:-?}"
 	done
 	gh release create "$PUBLISH" dist/*-x86_64-linux dist/SHA256SUMS --title "$PUBLISH" \
-		--notes "protonup and flatseal $PUBLISH: single binaries for x86_64 Linux (Steam Deck). Install with ./setup."
+		--notes "steamdeck $PUBLISH: one binary for x86_64 Linux (ProtonUp, Flatseal and system setup in one window). Install with ./setup."
 	exit 0
 fi
 
@@ -65,21 +64,10 @@ fi
 
 ./setup --programs --local "$TARGET" >&2
 
-prog=${1:-}
-if [ -z "$prog" ]; then
-	i=1
-	for p in "${PROGS[@]}"; do
-		printf '  %d) %s\n' "$i" "$p" >&2
-		i=$((i + 1))
-	done
-	read -rp "run which? " n
-	case $n in
-		[0-9]*) prog=${PROGS[$((n - 1))]:-} ;;
-		*) prog=$n ;;
-	esac
-fi
-case " ${PROGS[*]} " in
-	*" $prog "*) ;;
-	*) die "unknown program '$prog' (${PROGS[*]})" ;;
+# the section to open; no arguments are passed on to the program
+case "${1:-}" in
+	"") exec "$TARGET/steamdeck" ;;
+	protonup|flatseal) exec "$TARGET/steamdeck" "$1" gui ;;
+	system|log) exec "$TARGET/steamdeck" ;;
+	*) die "unknown section '$1' (protonup, flatseal, system, log)" ;;
 esac
-exec "$TARGET/$prog"

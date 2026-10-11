@@ -11,12 +11,8 @@ description = "ProtonUp and Flatseal for the Steam Deck as single binaries"
 path = "src/lib.rs"
 
 [[bin]]
-name = "protonup"
-path = "src/protonup.rs"
-
-[[bin]]
-name = "flatseal"
-path = "src/flatseal.rs"
+name = "steamdeck"
+path = "src/main.rs"
 
 [dependencies]
 iced = { version = "0.14", default-features = false, features = ["wgpu", "tiny-skia", "wayland", "x11", "thread-pool", "crisp"] }

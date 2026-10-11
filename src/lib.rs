@@ -3,7 +3,12 @@
 //! No Qt, no Python, no GTK: iced for the windows, ureq + rustls for HTTP, flate2/lzma-rust2 + tar for
 //! archives.
 
+pub mod launcher;
+pub mod log;
+pub mod system;
 pub mod ui;
+pub mod cli_flatseal;
+pub mod cli_protonup;
 
 // protonup: find, download, verify and install compatibility tools; set them per game
 pub mod games;
